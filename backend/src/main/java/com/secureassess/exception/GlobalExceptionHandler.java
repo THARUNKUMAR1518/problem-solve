@@ -22,8 +22,7 @@ public class GlobalExceptionHandler {
         ErrorResponse errorResponse = new ErrorResponse(
                 LocalDateTime.now(),
                 "Authentication failed: Invalid email or password",
-                request.getDescription(false)
-        );
+                request.getDescription(false));
         return new ResponseEntity<>(errorResponse, HttpStatus.UNAUTHORIZED);
     }
 
@@ -32,21 +31,20 @@ public class GlobalExceptionHandler {
         ErrorResponse errorResponse = new ErrorResponse(
                 LocalDateTime.now(),
                 ex.getMessage(),
-                request.getDescription(false)
-        );
+                request.getDescription(false));
         return new ResponseEntity<>(errorResponse, HttpStatus.NOT_FOUND);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ErrorResponse> handleValidationErrors(MethodArgumentNotValidException ex, WebRequest request) {
+    public ResponseEntity<ErrorResponse> handleValidationErrors(MethodArgumentNotValidException ex,
+            WebRequest request) {
         String details = ex.getBindingResult().getFieldErrors().stream()
                 .map(FieldError::getDefaultMessage)
                 .collect(Collectors.joining(", "));
         ErrorResponse errorResponse = new ErrorResponse(
                 LocalDateTime.now(),
                 "Validation Error",
-                details
-        );
+                details);
         return new ResponseEntity<>(errorResponse, HttpStatus.BAD_REQUEST);
     }
 
@@ -55,8 +53,7 @@ public class GlobalExceptionHandler {
         ErrorResponse errorResponse = new ErrorResponse(
                 LocalDateTime.now(),
                 ex.getMessage(),
-                request.getDescription(false)
-        );
+                request.getDescription(false));
         return new ResponseEntity<>(errorResponse, HttpStatus.BAD_REQUEST);
     }
 
@@ -65,8 +62,7 @@ public class GlobalExceptionHandler {
         ErrorResponse errorResponse = new ErrorResponse(
                 LocalDateTime.now(),
                 "An unexpected error occurred: " + ex.getMessage(),
-                request.getDescription(false)
-        );
+                request.getDescription(false));
         return new ResponseEntity<>(errorResponse, HttpStatus.INTERNAL_SERVER_ERROR);
     }
 }

@@ -4,7 +4,7 @@ import DashboardLayout from '../../layouts/DashboardLayout';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
 import { 
-  GraduationCap, Clipboard, FileCheck, Award, Download, BarChart2, AlertCircle, FileText, CheckCircle, XCircle
+  GraduationCap, Clipboard, FileCheck, Award, Download, BarChart2, AlertCircle, FileText, CheckCircle, XCircle, User as UserIcon
 } from 'lucide-react';
 
 const StudentResults = () => {
@@ -15,6 +15,7 @@ const StudentResults = () => {
   const [error, setError] = useState('');
 
   const fetchResults = async () => {
+    if (!user?.userId) return;
     try {
       const response = await api.get(`/results/student/${user.userId}`);
       setResults(response.data);
@@ -26,8 +27,10 @@ const StudentResults = () => {
   };
 
   useEffect(() => {
-    fetchResults();
-  }, [user.userId]);
+    if (user?.userId) {
+      fetchResults();
+    }
+  }, [user?.userId]);
 
   const handleDownloadPDF = async (resultId, examTitle) => {
     try {
@@ -51,6 +54,7 @@ const StudentResults = () => {
     { label: 'My Exams', to: '/student/exams', icon: Clipboard },
     { label: 'Exam History', to: '/student/history', icon: FileCheck },
     { label: 'Results', to: '/student/results', icon: Award },
+    { label: 'Profile', to: '/student/profile', icon: UserIcon },
   ];
 
   return (

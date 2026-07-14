@@ -3,39 +3,65 @@ import { useNavigate } from 'react-router-dom';
 import DashboardLayout from '../../layouts/DashboardLayout';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
+import { getStudentDashboardOfflineExams } from './studentDashboardUtils';
 import { 
-  GraduationCap, Clipboard, FileCheck, Landmark, Clock, Award, PlayCircle
+  GraduationCap, Clipboard, FileCheck, Landmark, Clock, Award, PlayCircle, User as UserIcon
 } from 'lucide-react';
 
 const StudentDashboard = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [exams, setExams] = useState([]);
+  const [completedCount, setCompletedCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   useEffect(() => {
     const fetchActiveExams = async () => {
-      // Offline mode check
-      if (user?.email === 'test@gmail.com' || user?.email?.startsWith('test-')) {
-        setExams([
-          { id: 1, title: 'Data Structures Midterm', subject: { name: 'Data Structures and Algorithms' }, durationMinutes: 90, totalMarks: 100 }
-        ]);
+      const offlineExams = getStudentDashboardOfflineExams(user);
+      if (offlineExams.length > 0) {
+        setExams(offlineExams);
         setLoading(false);
         return;
       }
 
       try {
-        const response = await api.get('/assessments/active');
-        setExams(response.data);
+        const qs = [];
+        if (user?.collegeId) qs.push(`collegeId=${encodeURIComponent(user.collegeId)}`);
+        if (user?.departmentId) qs.push(`departmentId=${encodeURIComponent(user.departmentId)}`);
+        if (user?.userId) qs.push(`studentId=${encodeURIComponent(user.userId)}`);
+        const query = qs.length ? `?${qs.join('&')}` : '';
+        const response = await api.get(`/assessments/active${query}`);
+        // Defensive: ensure array
+        if (Array.isArray(response.data)) {
+          setExams(response.data);
+        } else if (response.data) {
+          console.warn('assessments/active returned non-array:', response.data);
+          setExams([response.data]);
+        } else {
+          setExams([]);
+        }
+
+        // Fetch completed sessions count
+        if (user?.userId) {
+          const sessionsResponse = await api.get(`/exams/sessions/student/${user.userId}`);
+          if (Array.isArray(sessionsResponse.data)) {
+            const completed = sessionsResponse.data.filter(s => s.status === 'SUBMITTED' || s.status === 'FORCE_SUBMITTED');
+            setCompletedCount(completed.length);
+          }
+        }
       } catch (err) {
+        console.error('Error fetching active assessments', err);
         setError('Failed to fetch assigned assessments.');
+        setExams([]);
       } finally {
         setLoading(false);
       }
     };
     if (user) {
       fetchActiveExams();
+      const intervalId = setInterval(fetchActiveExams, 10000);
+      return () => clearInterval(intervalId);
     }
   }, [user]);
 
@@ -44,6 +70,7 @@ const StudentDashboard = () => {
     { label: 'My Exams', to: '/student/exams', icon: Clipboard },
     { label: 'Exam History', to: '/student/history', icon: FileCheck },
     { label: 'Results', to: '/student/results', icon: Award },
+    { label: 'Profile', to: '/student/profile', icon: UserIcon },
   ];
 
   return (
@@ -70,7 +97,7 @@ const StudentDashboard = () => {
           <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-premium flex items-center justify-between">
             <div>
               <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Completed Exams</p>
-              <h3 class="text-3xl font-bold text-slate-900">0</h3>
+              <h3 class="text-3xl font-bold text-slate-900">{completedCount}</h3>
             </div>
             <div class="p-3 bg-emerald-50 rounded-xl text-emerald-600">
               <FileCheck class="w-6 h-6" />
@@ -130,6 +157,13 @@ const StudentDashboard = () => {
           </div>
         </div>
       </div>
+
+          {/* Debug: show mock user/token to aid troubleshooting */}
+          <div class="mt-4 text-xs text-slate-500">
+            <strong>Debug:</strong>
+            <div>User: {JSON.stringify(JSON.parse(localStorage.getItem('secureassess_user') || 'null'))}</div>
+            <div>Token: {localStorage.getItem('secureassess_token') || 'none'}</div>
+          </div>
     </DashboardLayout>
   );
 };

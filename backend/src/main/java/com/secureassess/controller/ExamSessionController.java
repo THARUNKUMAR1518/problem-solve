@@ -21,7 +21,7 @@ public class ExamSessionController {
     private final ExamSessionRepository examSessionRepository;
 
     public ExamSessionController(ExamSessionService examSessionService, ExamAnswerRepository examAnswerRepository,
-                                 ExamSessionRepository examSessionRepository) {
+            ExamSessionRepository examSessionRepository) {
         this.examSessionService = examSessionService;
         this.examAnswerRepository = examAnswerRepository;
         this.examSessionRepository = examSessionRepository;
@@ -33,7 +33,7 @@ public class ExamSessionController {
             @RequestParam String studentId,
             @RequestParam String assessmentId,
             HttpServletRequest request) {
-        
+
         String ip = request.getRemoteAddr();
         String userAgent = request.getHeader("User-Agent");
         ExamSession session = examSessionService.startSession(studentId, assessmentId, ip, userAgent);
@@ -54,7 +54,7 @@ public class ExamSessionController {
             @RequestParam String questionId,
             @RequestParam int remainingTimeSeconds,
             @RequestBody Map<String, String> body) {
-        
+
         String answerJson = body.get("answerJson");
         ExamAnswer answer = examSessionService.saveAnswer(id, questionId, answerJson, remainingTimeSeconds);
         return ResponseEntity.ok(answer);
@@ -66,7 +66,7 @@ public class ExamSessionController {
             @PathVariable String id,
             @RequestParam ViolationType type,
             @RequestBody Map<String, String> body) {
-        
+
         String description = body.get("description");
         String screenshotUrl = body.get("screenshotUrl");
         ViolationLog log = examSessionService.logViolation(id, type, description, screenshotUrl);
@@ -78,7 +78,7 @@ public class ExamSessionController {
     public ResponseEntity<ExamSession> submitExam(
             @PathVariable String id,
             @RequestParam SessionStatus status) {
-        
+
         if (status != SessionStatus.SUBMITTED && status != SessionStatus.FORCE_SUBMITTED) {
             return ResponseEntity.badRequest().build();
         }

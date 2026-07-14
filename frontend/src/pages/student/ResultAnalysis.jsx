@@ -5,7 +5,8 @@ import api from '../../services/api';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement } from 'chart.js';
 import { Doughnut, Bar } from 'react-chartjs-2';
 import { 
-  Award, ArrowLeft, Download, CheckCircle2, AlertTriangle, FileText, Landmark, Clock, TrendingUp
+  Award, ArrowLeft, Download, CheckCircle2, AlertTriangle, FileText, Landmark, Clock, TrendingUp,
+  GraduationCap, Clipboard, FileCheck, User as UserIcon
 } from 'lucide-react';
 
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement);
@@ -211,9 +212,11 @@ const ResultAnalysis = () => {
   };
 
   const navItems = [
-    { label: 'Dashboard', to: '/student/dashboard', icon: Award },
-    { label: 'My Exams', to: '/student/exams', icon: Award },
+    { label: 'Dashboard', to: '/student/dashboard', icon: GraduationCap },
+    { label: 'My Exams', to: '/student/exams', icon: Clipboard },
+    { label: 'Exam History', to: '/student/history', icon: FileCheck },
     { label: 'Results', to: '/student/results', icon: Award },
+    { label: 'Profile', to: '/student/profile', icon: UserIcon },
   ];
 
   return (

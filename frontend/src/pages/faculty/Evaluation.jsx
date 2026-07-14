@@ -117,15 +117,8 @@ const Evaluation = () => {
       // 1. Submit manual grades for each answer one by one
       for (const ansId of Object.keys(gradesBuffer)) {
         const item = gradesBuffer[ansId];
-        const answerObj = answers.find(a => a.id === Number(ansId));
+        const answerObj = answers.find(a => String(a.id) === String(ansId));
         if (answerObj && answerObj.question.questionType !== 'OBJECTIVE') {
-          // POST /api/exams/sessions/{id}/answer-grade or similar, or update answer fields
-          // Since we want to support updating the score in backend, we can write an endpoint or let result generator compute it.
-          // Wait! To keep it simple and robust, let's create a quick PUT endpoint in ExamSessionController or write it in Service.
-          // Or we can post the graded answer to `/api/exams/sessions/${selectedSession.id}/answer` with a query parameter!
-          // Yes! In `ExamSessionController.saveAnswer`, we saved the student answer. We can add an endpoint to save evaluations:
-          // We can put `/api/exams/sessions/answers/${ansId}/grade?score=...&isCorrect=...&feedback=...` which updates the ExamAnswer object.
-          // Let's make this call.
           await api.put(`/exams/sessions/answers/${ansId}/grade?score=${item.score}&isCorrect=${item.isCorrect}&feedback=${encodeURIComponent(item.feedback)}`);
         }
       }

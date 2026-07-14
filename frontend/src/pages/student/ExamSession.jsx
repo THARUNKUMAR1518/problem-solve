@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useProctoring } from '../../hooks/useProctoring';
 import { useAuth } from '../../context/AuthContext';
-import api from '../../services/api';
+import api, { isMockToken } from '../../services/api';
 import { 
   ShieldCheck, AlertTriangle, ChevronLeft, ChevronRight, Bookmark, Send, HelpCircle, Video, Camera, WifiOff
 } from 'lucide-react';
@@ -20,7 +20,7 @@ const ExamSession = () => {
   const [assessmentDetails, setAssessmentDetails] = useState(null);
   
   // Custom proctor hook
-  const { warnings, stream, violationLogs, recordViolation } = useProctoring(id, assessmentDetails?.maxWarnings || 3);
+  const { warnings, stream, violationLogs, recordViolation, popupEvent } = useProctoring(id, assessmentDetails?.maxWarnings || 3);
 
   // States to track question palette status
   const [markedForReview, setMarkedForReview] = useState({});
@@ -74,12 +74,18 @@ const ExamSession = () => {
     }
   }, [violationLogs, lastLogLength]);
 
+  // Show popup-only events (e.g., FACE_MISSING) without adding to persistent logs or incrementing warnings
+  useEffect(() => {
+    if (!popupEvent) return;
+    setActiveWarning(popupEvent);
+  }, [popupEvent]);
+
   // Round Loading Countdown timer states
   const [isAutoSubmitting, setIsAutoSubmitting] = useState(false);
   const [countdown, setCountdown] = useState(5);
 
   useEffect(() => {
-    const maxAllowed = assessmentDetails?.maxWarnings || 5;
+    const maxAllowed = assessmentDetails?.maxWarnings || 3;
     if (warnings >= maxAllowed && !isAutoSubmitting) {
       setIsAutoSubmitting(true);
       setCountdown(5);
@@ -91,7 +97,7 @@ const ExamSession = () => {
     if (countdown <= 0) {
       const executeAutoSubmit = async () => {
         try {
-          if (!id.startsWith('mock-')) {
+          if (!id.startsWith('mock-') && !isMockToken()) {
             await api.post(`/exams/sessions/${id}/submit?status=FORCE_SUBMITTED`);
           }
         } catch (e) {}
@@ -115,64 +121,143 @@ const ExamSession = () => {
   const [compiling, setCompiling] = useState(false);
   const [compilerOutput, setCompilerOutput] = useState('');
   const [compilerSuccess, setCompilerSuccess] = useState(null);
+  const [testResults, setTestResults] = useState([]);
+  const [passedCount, setPassedCount] = useState(0);
+  const [selectedLanguage, setSelectedLanguage] = useState('java');
+  const [compiledOk, setCompiledOk] = useState(false);
+  const [compileErrors, setCompileErrors] = useState('');
+  const [testsExecuted, setTestsExecuted] = useState(false);
+  const [compilePreview, setCompilePreview] = useState([]);
 
-  // Compile / Run Mock Code
-  const handleRunCode = () => {
+  // Compile only (show errors). Use handleExecuteTests to run testcases.
+  const handleCompile = async () => {
     const currentQuestion = answers[currentIndex].question;
     const code = studentAnswers[currentQuestion.id] || "";
 
     if (code.trim() === "") {
       setCompilerOutput("[ERROR] Please write some code before compiling.");
       setCompilerSuccess(false);
+      setCompiledOk(false);
+      setCompileErrors('[ERROR] No source provided');
       return;
     }
 
     setCompiling(true);
-    setCompilerOutput("[INFO] Compiling source code...\n[INFO] Injecting sandboxed compiler environment...");
+    setCompilerOutput("[INFO] Compiling source code...\n[INFO] Contacting compile service...");
     setCompilerSuccess(null);
 
-    setTimeout(() => {
-      // Simple braces parser
+    try {
+      const resp = await api.post('/compile', {
+        language: selectedLanguage || currentQuestion.programmingLanguage || 'java',
+        source: code,
+        runTests: false
+      });
+      const data = resp.data || {};
+      if (data.compiled === false) {
+        const errMsg = data.errors || '[ERROR] Compilation failed';
+        setCompilerOutput(errMsg);
+        setCompilerSuccess(false);
+        setCompiledOk(false);
+        setCompileErrors(errMsg);
+      } else {
+        setCompilerOutput('[INFO] Compiled successfully.');
+        setCompilerSuccess(true);
+        setCompiledOk(true);
+        setCompileErrors('');
+        // If testcases exist, request a quick preview run of the first public testcase
+        try {
+          let testCases = [];
+          if (currentQuestion.testCasesJson) testCases = JSON.parse(currentQuestion.testCasesJson);
+          if (testCases.length > 0) {
+            const previewResp = await api.post('/compile', {
+              language: selectedLanguage || currentQuestion.programmingLanguage || 'java',
+              source: code,
+              runTests: true,
+              preview: true,
+              testCases: [testCases[0]]
+            });
+            const previewData = previewResp.data || {};
+            const results = previewData.results || [];
+            setCompilePreview(results.map((r, i) => ({ index: i + 1, input: r.input, expected: r.expected, actual: r.actual, passed: r.passed, hidden: r.hidden })));
+            // append preview to console
+            if (results.length > 0) {
+              setCompilerOutput(prev => prev + `\n[PREVIEW] Sample Run: Test 1 -> ${results[0].passed ? 'PASSED' : 'FAILED'}`);
+            }
+          } else {
+            setCompilePreview([]);
+          }
+        } catch (e) {
+          setCompilePreview([]);
+        }
+      }
+    } catch (e) {
+      // Local fallback compile check (basic)
       let openBraces = (code.match(/\{/g) || []).length;
       let closeBraces = (code.match(/\}/g) || []).length;
-
       if (openBraces !== closeBraces) {
-        setCompilerOutput(prev => prev + `\n[ERROR] Compilation Failed: Unbalanced curly braces detected (open: ${openBraces}, close: ${closeBraces}).`);
+        const errMsg = `\n[ERROR] Compilation Failed: Unbalanced curly braces detected (open: ${openBraces}, close: ${closeBraces}).`;
+        setCompilerOutput(errMsg);
         setCompilerSuccess(false);
-        setCompiling(false);
-        return;
+        setCompiledOk(false);
+        setCompileErrors(errMsg);
+      } else {
+        setCompilerOutput('[INFO] Compiled (local fallback).');
+        setCompilerSuccess(true);
+        setCompiledOk(true);
+        setCompileErrors('');
       }
-
-      let testCases = [];
-      try {
-        if (currentQuestion.testCasesJson) {
-          testCases = JSON.parse(currentQuestion.testCasesJson);
-        } else {
-          testCases = [{ input: "5 10", output: "15" }];
-        }
-      } catch {
-        testCases = [{ input: "5 10", output: "15" }];
-      }
-
-      let passedCount = 0;
-      let stdout = "\n[INFO] Compiling completed. Running test suites...\n";
-
-      testCases.forEach((tc, idx) => {
-        stdout += `\nTest Case ${idx + 1}: Input parameters: "${tc.input}"`;
-        stdout += `\nExpected output: "${tc.output}"`;
-        stdout += `\nActual output: "${tc.output}"`;
-        stdout += `\nResult: PASSED ✓\n`;
-        passedCount++;
-      });
-
-      stdout += `\nSummary: Passed ${passedCount} of ${testCases.length} Test Cases.`;
-      stdout += `\nStatus: SUCCESS ✓`;
-
-      setCompilerOutput(prev => prev + stdout);
-      setCompilerSuccess(true);
+    } finally {
       setCompiling(false);
-    }, 1500);
+      setTestsExecuted(false);
+    }
   };
+
+  const handleExecuteTests = async () => {
+    const currentQuestion = answers[currentIndex].question;
+    const code = studentAnswers[currentQuestion.id] || "";
+
+    if (!compiledOk) {
+      setCompilerOutput('[ERROR] Please compile successfully before executing tests.');
+      return;
+    }
+
+    setCompiling(true);
+    setCompilerOutput('[INFO] Executing testcases...');
+    setCompilerSuccess(null);
+
+    let testCases = [];
+    try {
+      if (currentQuestion.testCasesJson) testCases = JSON.parse(currentQuestion.testCasesJson);
+      else testCases = [];
+    } catch { testCases = []; }
+
+    try {
+      const resp = await api.post('/compile', {
+        language: selectedLanguage || currentQuestion.programmingLanguage || 'java',
+        source: code,
+        runTests: true,
+        testCases
+      });
+      const data = resp.data || {};
+      const results = data.results || [];
+      const _passed = results.filter(r => r.passed).length;
+      setTestResults(results.map((r, i) => ({ index: i + 1, input: r.input, expected: r.expected, actual: r.actual, passed: r.passed, hidden: r.hidden })));
+      setPassedCount(_passed);
+      setCompilerOutput(`[INFO] Executed ${results.length} testcases. Passed ${_passed}.`);
+      setCompilerSuccess(_passed === results.length);
+      setTestsExecuted(true);
+    } catch (e) {
+      setCompilerOutput('[ERROR] Test execution failed (service unavailable).');
+    } finally {
+      setCompiling(false);
+    }
+  };
+
+  // Keep selected language in sync with question default
+  useEffect(() => {
+    const q = answers[currentIndex]?.question;
+    if (q?.programmingLanguage) setSelectedLanguage(q.programmingLanguage);
+  }, [currentIndex, answers]);
 
   // Fullscreen exit warning listener
   useEffect(() => {
@@ -357,7 +442,7 @@ const ExamSession = () => {
     if (!isAuto && !window.confirm('Are you sure you want to finalize and submit your exam? You cannot modify answers after submission.')) return;
     
     // Offline mode bypass
-    if (id.startsWith('mock-') || user?.email === 'test@gmail.com' || user?.email?.startsWith('test-')) {
+    if (id.startsWith('mock-') || user?.email === 'test@gmail.com' || user?.email?.startsWith('test-') || isMockToken()) {
       if (document.fullscreenElement) {
         document.exitFullscreen().catch(() => {});
       }
@@ -452,9 +537,11 @@ const ExamSession = () => {
               </span>
               <h3 class="text-base font-bold text-slate-900">Proctor Warning Logged</h3>
               <p class="text-xs text-slate-500 font-medium leading-relaxed">{activeWarning.description}</p>
-              <p class="text-xs font-bold text-rose-500 mt-2 bg-rose-50/50 py-1.5 rounded-xl border border-rose-100/50">
-                Current Warnings: {warnings} / {assessmentDetails?.maxWarnings || 5}
-              </p>
+              {activeWarning.warningIncrement !== 0 && (
+                <p class="text-xs font-bold text-rose-500 mt-2 bg-rose-50/50 py-1.5 rounded-xl border border-rose-100/50">
+                  Current Warnings: {warnings} / {assessmentDetails?.maxWarnings || 5}
+                </p>
+              )}
             </div>
 
             <button
@@ -658,6 +745,19 @@ const ExamSession = () => {
                         </button>
                       );
                     })}
+                    {/* Show user's answer vs correct answer */}
+                    <div class="mt-4 p-3 bg-slate-50 border border-slate-100 rounded-lg text-xs">
+                      <div class="mb-2 text-[11px] font-bold text-slate-600">Your Answer:</div>
+                      <div class="mb-3 text-sm font-medium text-slate-800">{
+                        studentAnswers[currentQuestion.id] !== undefined && studentAnswers[currentQuestion.id] !== null
+                          ? JSON.parse(currentQuestion.optionsJson)[Number(studentAnswers[currentQuestion.id])] : 'Not answered'
+                      }</div>
+
+                      <div class="mb-2 text-[11px] font-bold text-slate-600">Correct Answer:</div>
+                      <div class="text-sm font-medium text-emerald-700">{
+                        currentQuestion.correctAnswerJson ? JSON.parse(currentQuestion.optionsJson)[Number(currentQuestion.correctAnswerJson)] : 'N/A'
+                      }</div>
+                    </div>
                   </div>
                 )}
 
@@ -678,16 +778,39 @@ const ExamSession = () => {
                 {/* 3. Programming IDE response */}
                 {currentQuestion.questionType === 'PROGRAMMING' && (
                   <div class="pt-2 space-y-4">
-                    <div class="flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase">
-                      <span>Interactive Code compiler ({currentQuestion.programmingLanguage})</span>
-                      <button
-                        type="button"
-                        onClick={handleRunCode}
-                        disabled={compiling}
-                        class="px-3 py-1 bg-primary hover:bg-primary-hover text-white rounded-lg text-[10px] font-bold shadow transition-all disabled:opacity-60"
-                      >
-                        {compiling ? 'Running...' : 'Run Code'}
-                      </button>
+                      <div class="flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase">
+                      <div class="flex items-center space-x-3">
+                        <span>Interactive Code compiler ({currentQuestion.programmingLanguage})</span>
+                        <select value={selectedLanguage} onChange={(e) => setSelectedLanguage(e.target.value)} className="text-xs bg-slate-50 border border-slate-200 rounded px-2 py-1">
+                          <option value="java">Java 21</option>
+                          <option value="python">Python 3</option>
+                          <option value="c">C (gcc)</option>
+                          <option value="cpp">C++ (g++)</option>
+                          <option value="javascript">Node.js (JavaScript)</option>
+                        </select>
+                        {compiledOk && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200">Compiled ✓</span>
+                        )}
+                      </div>
+                      <div class="flex items-center space-x-2">
+                        <button
+                          type="button"
+                          onClick={handleCompile}
+                          disabled={compiling}
+                          class="px-3 py-1 bg-primary hover:bg-primary-hover text-white rounded-lg text-[10px] font-bold shadow transition-all disabled:opacity-60"
+                        >
+                          {compiling ? 'Compiling...' : 'Compile'}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={handleExecuteTests}
+                          disabled={!compiledOk || compiling}
+                          class="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-[10px] font-bold shadow transition-all disabled:opacity-60"
+                        >
+                          {compiling ? 'Running...' : 'Execute Tests'}
+                        </button>
+                      </div>
                     </div>
                     
                     <textarea
@@ -709,12 +832,87 @@ const ExamSession = () => {
                       </div>
                       
                       <div className={`p-4 rounded-xl text-xs font-mono min-h-[100px] border whitespace-pre-wrap leading-relaxed ${
-                        compilerSuccess === true ? 'bg-emerald-950/20 border-emerald-900/30 text-emerald-300' :
-                        compilerSuccess === false ? 'bg-rose-950/20 border-rose-900/30 text-rose-300' :
-                        'bg-slate-900 border-slate-800 text-slate-400'
+                        compilerSuccess === true ? 'bg-black border-emerald-900/30 text-emerald-300' :
+                        compilerSuccess === false ? 'bg-black border-rose-900/30 text-rose-300' :
+                        'bg-black border-slate-800 text-slate-400'
                       }`}>
-                        {compilerOutput || '// Click "Run Code" to compile and check against unit test parameters.'}
+                        {compilerOutput || '// Click "Compile" then "Execute Tests" to run against unit test parameters.'}
                       </div>
+                      {/* Preview sample run (after compile) */}
+                      {compilePreview.length > 0 && (
+                        <div class="mt-3">
+                          <div class="text-xs font-bold text-slate-600 mb-2">Sample Run (Compile Preview):</div>
+                          <div class="overflow-x-auto">
+                            <table class="w-full text-sm text-left border-collapse">
+                              <thead>
+                                <tr class="text-xs text-slate-500">
+                                  <th class="px-3 py-2 border-b">#</th>
+                                  <th class="px-3 py-2 border-b">I/P</th>
+                                  <th class="px-3 py-2 border-b">YOUR O/P</th>
+                                  <th class="px-3 py-2 border-b">STATUS</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {compilePreview.map((tr) => (
+                                  <tr key={tr.index} className={`${tr.passed ? 'bg-emerald-50' : 'bg-rose-50'}`}>
+                                    <td class="px-3 py-2 border-b">TC {tr.index}</td>
+                                    <td class="px-3 py-2 border-b whitespace-pre-wrap">{tr.hidden ? 'Hidden' : tr.input}</td>
+                                    <td class="px-3 py-2 border-b">{tr.hidden ? 'Hidden' : tr.actual}</td>
+                                    <td class="px-3 py-2 border-b">{tr.passed ? <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-600 text-white">Passed</span> : <span class="text-xs px-2 py-0.5 rounded-full bg-rose-600 text-white">Failed</span>}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Test case results table */}
+                      {testResults.length > 0 && (
+                        <div class="mt-3">
+                          <div class="text-xs font-bold text-slate-600 mb-2">Testcases Output:</div>
+                          <div class="overflow-x-auto">
+                            <table class="w-full text-sm text-left border-collapse">
+                              <thead>
+                                <tr class="text-xs text-slate-500">
+                                  <th class="px-3 py-2 border-b">#</th>
+                                  <th class="px-3 py-2 border-b">I/P</th>
+                                  <th class="px-3 py-2 border-b">EXPECTED O/P</th>
+                                  <th class="px-3 py-2 border-b">YOUR O/P</th>
+                                  <th class="px-3 py-2 border-b">STATUS</th>
+                                  <th class="px-3 py-2 border-b">POINTS</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {testResults.map((tr) => {
+                                  const pointsTotal = Number(currentQuestion?.marks) || 10;
+                                  const pointsPerTest = Math.floor(pointsTotal / testResults.length) || 0;
+                                  const pointsAwarded = tr.passed ? pointsPerTest : 0;
+
+                                  return (
+                                    <tr key={tr.index} className={`${tr.passed ? 'bg-emerald-50' : 'bg-rose-50'}`}>
+                                      <td class="px-3 py-2 border-b align-top">TC {tr.index}</td>
+                                      <td class="px-3 py-2 border-b align-top whitespace-pre-wrap">{tr.hidden ? 'Hidden' : tr.input}</td>
+                                      <td class="px-3 py-2 border-b align-top">{tr.hidden ? 'Hidden' : tr.expected}</td>
+                                      <td class="px-3 py-2 border-b align-top">{tr.hidden ? 'Hidden' : tr.actual}</td>
+                                      <td class="px-3 py-2 border-b align-top">
+                                        {tr.passed ? (
+                                          <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-600 text-white">Passed</span>
+                                        ) : (
+                                          <span class="text-xs px-2 py-0.5 rounded-full bg-rose-600 text-white">Failed</span>
+                                        )}
+                                      </td>
+                                      <td class="px-3 py-2 border-b align-top font-bold">{pointsAwarded}</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+
+                          <div class="mt-3 text-sm font-bold">Passed {passedCount} / {testResults.length} test cases — Points: {testResults.reduce((s, tr) => s + (tr.passed ? Math.floor((Number(currentQuestion?.marks||10)/testResults.length) || 0) : 0), 0)} / {currentQuestion?.marks || 10}</div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

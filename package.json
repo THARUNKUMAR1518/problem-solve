@@ -1,0 +1,30 @@
+{
+  "name": "proctorassess",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "node scripts/dev.js",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": "mvn -f backend/pom.xml spring-boot:run",
+    "dev:mock-api": "node scripts/mock-api.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/santhoshjm/proctorassess.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/santhoshjm/proctorassess/issues"
+  },
+  "homepage": "https://github.com/santhoshjm/proctorassess#readme",
+  "dependencies": {
+    "body-parser": "^2.3.0",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "mongodb": "^7.4.0"
+  }
+}

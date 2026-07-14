@@ -5,6 +5,7 @@ export const useProctoring = (sessionId, maxWarnings = 5, initialWarningCount = 
   const [warnings, setWarnings] = useState(initialWarningCount);
   const [stream, setStream] = useState(null);
   const [violationLogs, setViolationLogs] = useState([]);
+  const [popupEvent, setPopupEvent] = useState(null);
   const hasSubmitted = useRef(false);
 
   // References to preserve state in listeners
@@ -18,8 +19,15 @@ export const useProctoring = (sessionId, maxWarnings = 5, initialWarningCount = 
       setStream(mediaStream);
       return mediaStream;
     } catch (err) {
-      console.warn("Webcam access denied. Initializing simulation overlay...");
-      return null;
+      console.warn("Failed requesting video and audio, falling back to video only...", err);
+      try {
+        const mediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        setStream(mediaStream);
+        return mediaStream;
+      } catch (videoErr) {
+        console.warn("Webcam access denied. Initializing simulation overlay...", videoErr);
+        return null;
+      }
     }
   };
 
@@ -35,10 +43,6 @@ export const useProctoring = (sessionId, maxWarnings = 5, initialWarningCount = 
     // Prevent double submissions
     if (hasSubmitted.current) return;
 
-    // Update local warnings counter and logs first for instant UI response
-    const nextWarnings = warningsRef.current + weight;
-    setWarnings(nextWarnings);
-
     const localLog = {
       id: Date.now(),
       violationType: type,
@@ -46,6 +50,32 @@ export const useProctoring = (sessionId, maxWarnings = 5, initialWarningCount = 
       description,
       timestamp: new Date().toISOString()
     };
+
+    // Popup-only events (weight === 0): trigger a transient popup but DO NOT increment warnings or append to the persistent log
+    if (weight === 0) {
+      setPopupEvent(localLog);
+
+      // Send to server if not mock session (still record event server-side)
+      if (!sessionId.startsWith('mock-')) {
+        try {
+          await api.post(`/exams/sessions/${sessionId}/violation`, {
+            violationType: type,
+            warningWeight: weight,
+            description,
+            screenshotUrl: ""
+          });
+        } catch (err) {
+          console.warn("Could not sync proctor popup-only event with server.");
+        }
+      }
+
+      return;
+    }
+
+    // Update local warnings counter and logs first for instant UI response
+    const nextWarnings = warningsRef.current + weight;
+    setWarnings(nextWarnings);
+
     setViolationLogs(prev => [localLog, ...prev]);
 
     if (nextWarnings >= maxWarnings) {
@@ -129,22 +159,6 @@ export const useProctoring = (sessionId, maxWarnings = 5, initialWarningCount = 
     // Initial Camera start
     startCamera();
 
-    // 7. Simulating Proctor Vetting alerts (runs every 12 seconds to simulate real camera object classifications)
-    const proctorInterval = setInterval(() => {
-      const randomTrigger = Math.random();
-      if (randomTrigger < 0.16) {
-        recordViolation('MOBILE_PHONE_DETECTED', 'Malpractice alert: Mobile phone or unauthorized display classified in camera frame.');
-      } else if (randomTrigger < 0.32) {
-        recordViolation('FACE_MISSING', 'Proctor alert: Student face missing or camera feed blocked/hidden.');
-      } else if (randomTrigger < 0.48) {
-        recordViolation('FACE_AWAY', 'Proctor alert: Student face turned away (suspected malpractice).');
-      } else if (randomTrigger < 0.64) {
-        recordViolation('MULTIPLE_FACES', 'Proctor alert: Unidentified secondary persons or background members detected in webcam feed.', 2);
-      } else if (randomTrigger < 0.80) {
-        recordViolation('TALKING', 'Proctor alert: External conversation or voice signals detected.');
-      }
-    }, 12000);
-
     return () => {
       // Clean up listeners
       document.removeEventListener('contextmenu', handleContextMenu);
@@ -154,7 +168,6 @@ export const useProctoring = (sessionId, maxWarnings = 5, initialWarningCount = 
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('blur', handleWindowBlur);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
-      clearInterval(proctorInterval);
       stopCamera();
     };
   }, [sessionId, maxWarnings]);
@@ -164,6 +177,7 @@ export const useProctoring = (sessionId, maxWarnings = 5, initialWarningCount = 
     stream,
     violationLogs,
     recordViolation,
+    popupEvent,
     startCamera,
     stopCamera
   };

@@ -15,13 +15,16 @@ const Login = () => {
 
   const isExpired = searchParams.get('expired') === 'true';
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleSubmit = async (e, optEmail, optPassword) => {
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
     setError('');
     setLoading(true);
 
+    const loginEmail = optEmail || email;
+    const loginPassword = optPassword || password;
+
     try {
-      await login(email, password);
+      await login(loginEmail, loginPassword);
       navigate('/');
     } catch (err) {
       setError(err);
@@ -74,7 +77,7 @@ const Login = () => {
       {/* Right side: Login Panel */}
       <div class="w-full lg:w-1/2 flex items-center justify-center p-8">
         <div class="w-full max-w-md bg-white rounded-2xl border border-slate-100 shadow-premium p-10">
-          
+
           <div class="mb-8">
             <div class="flex lg:hidden items-center space-x-2 mb-6">
               <ShieldCheck class="w-8 h-8 text-primary" />
@@ -162,6 +165,15 @@ const Login = () => {
               )}
             </button>
           </form>
+
+          <div class="mt-4 text-center space-y-2">
+            <p class="text-xs text-slate-400">Quick test sign-ins (mock)</p>
+            <div class="flex items-center justify-center space-x-2 mt-2">
+              <button onClick={() => { setEmail('student@secureassess.com'); setPassword('test@123'); handleSubmit(null, 'student@secureassess.com', 'test@123'); }} class="px-3 py-1 text-xs bg-slate-100 rounded-xl">Student</button>
+              <button onClick={() => { setEmail('faculty@secureassess.com'); setPassword('test@123'); handleSubmit(null, 'faculty@secureassess.com', 'test@123'); }} class="px-3 py-1 text-xs bg-slate-100 rounded-xl">Faculty</button>
+              <button onClick={() => { setEmail('devstudent@secureassess.com'); setPassword('test@123'); handleSubmit(null, 'devstudent@secureassess.com', 'test@123'); }} class="px-3 py-1 text-xs bg-slate-100 rounded-xl">Dev Student</button>
+            </div>
+          </div>
 
           <div class="mt-8 pt-6 border-t border-slate-100 text-center">
             <p class="text-xs text-slate-500">

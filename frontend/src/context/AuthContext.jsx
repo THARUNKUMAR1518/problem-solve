@@ -37,9 +37,19 @@ export const AuthProvider = ({ children }) => {
         fullName = email === 'jane@secureassess.com' ? 'Jane Smith' : 'John Doe';
       }
 
-      const userData = { email, fullName, role, userId, collegeId };
-      localStorage.setItem('secureassess_token', 'mock_access_token');
-      localStorage.setItem('secureassess_refresh_token', 'mock_refresh_token');
+      // align test fallback ids with frontend mock server entries
+      if (role === 'FACULTY') userId = 'u-faculty-1';
+      if (role === 'STUDENT') userId = email.includes('dev') ? 'u-dev-student' : 'u-student-1';
+      collegeId = 'c-1';
+      // map department ids to align with mock DB
+      let departmentId = 'd-IT';
+      if (role === 'FACULTY') departmentId = 'd-CSE';
+      if (email.includes('cse') || email.includes('faculty')) departmentId = 'd-CSE';
+
+      const userData = { email, fullName, role, userId, collegeId, departmentId };
+      // Use explicit MOCK- token so api.js routing picks up mockServer
+      localStorage.setItem('secureassess_token', 'MOCK-ACCESS-TOKEN');
+      localStorage.setItem('secureassess_refresh_token', 'MOCK-REFRESH-TOKEN');
       localStorage.setItem('secureassess_user', JSON.stringify(userData));
       setUser(userData);
       return userData;
@@ -62,10 +72,13 @@ export const AuthProvider = ({ children }) => {
       if (email === 'student@secureassess.com' || email === 'jane@secureassess.com' || email === 'faculty@secureassess.com') {
         const fallbackRole = email.includes('faculty') ? 'FACULTY' : 'STUDENT';
         const fallbackName = email.includes('faculty') ? 'Dr. Robert Johnson' : (email.includes('jane') ? 'Jane Smith' : 'John Doe');
-        const userData = { email, fullName: fallbackName, role: fallbackRole, userId: 'mock-user-999', collegeId: 'mock-college-999' };
-        
-        localStorage.setItem('secureassess_token', 'mock_access_token');
-        localStorage.setItem('secureassess_refresh_token', 'mock_refresh_token');
+        // align with mock server
+        const userId = fallbackRole === 'FACULTY' ? 'u-faculty-1' : (email.includes('dev') ? 'u-dev-student' : 'u-student-1');
+        const departmentId = fallbackRole === 'FACULTY' ? 'd-CSE' : 'd-IT';
+        const userData = { email, fullName: fallbackName, role: fallbackRole, userId, collegeId: 'c-1', departmentId };
+        // Use explicit MOCK- token so api.js routing picks up mockServer
+        localStorage.setItem('secureassess_token', 'MOCK-ACCESS-TOKEN');
+        localStorage.setItem('secureassess_refresh_token', 'MOCK-REFRESH-TOKEN');
         localStorage.setItem('secureassess_user', JSON.stringify(userData));
         setUser(userData);
         return userData;

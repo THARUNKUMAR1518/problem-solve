@@ -74,7 +74,16 @@ const DashboardLayout = ({ navItems, children }) => {
 
         {/* Sidebar Footer User Profile */}
         <div class="p-4 border-t border-slate-800 bg-[#0c1221]">
-          <div class="flex items-center space-x-3 px-2 py-1.5 mb-2">
+          <div 
+            onClick={() => {
+              if (user?.role === 'STUDENT') {
+                navigate('/student/profile');
+              }
+            }}
+            class={`flex items-center space-x-3 px-2 py-1.5 mb-2 rounded-xl transition-all duration-200 ${
+              user?.role === 'STUDENT' ? 'cursor-pointer hover:bg-slate-800/40' : ''
+            }`}
+          >
             <div class="w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary">
               <UserIcon class="w-5 h-5" />
             </div>

@@ -31,6 +31,9 @@ import ReadinessCheck from './pages/student/ReadinessCheck';
 import ExamSession from './pages/student/ExamSession';
 import StudentResults from './pages/student/StudentResults';
 import ResultAnalysis from './pages/student/ResultAnalysis';
+import MyExams from './pages/student/MyExams';
+import ExamHistory from './pages/student/ExamHistory';
+import StudentProfile from './pages/student/StudentProfile';
 
 const ProtectedRoute = ({ children, allowedRoles }) => {
   const { user, loading } = useAuth();
@@ -158,6 +161,9 @@ function App() {
             <ProtectedRoute allowedRoles={['STUDENT']}>
               <Routes>
                 <Route path="dashboard" element={<StudentDashboard />} />
+                <Route path="exams" element={<MyExams />} />
+                <Route path="history" element={<ExamHistory />} />
+                <Route path="profile" element={<StudentProfile />} />
                 <Route path="exam/:id/readiness" element={<ReadinessCheck />} />
                 <Route path="exam/:id/session" element={<ExamSession />} />
                 <Route path="results" element={<StudentResults />} />
