@@ -1,0 +1,41 @@
+name: Hourly Project Automation
+
+on:
+  schedule:
+    - cron: "0 * * * *"   # Runs every hour
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  hourly-commit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create reports folder
+        run: |
+          mkdir -p reports
+          touch reports/hourly-report.txt
+
+      - name: Append Current Time
+        run: |
+          echo "Commit Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> reports/hourly-report.txt
+
+      - name: Commit and Push
+        run: |
+          git add reports/hourly-report.txt
+
+          git commit -m "Hourly Update - $(date -u '+%Y-%m-%d %H:%M:%S UTC')" || exit 0
+
+          git push origin HEAD:${{ github.ref_name }}
