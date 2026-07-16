@@ -2,8 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
-import { 
-  ShieldCheck, Camera, Mic, Monitor, Wifi, Chrome, Maximize, CheckCircle, AlertTriangle, ArrowRight, ArrowLeft
+import {
+  ShieldCheck, Camera, Mic, Monitor, Wifi, Chrome, Maximize, CheckCircle, AlertTriangle, ArrowRight, ArrowLeft, Puzzle
 } from 'lucide-react';
 
 const ReadinessCheck = () => {
@@ -22,6 +22,8 @@ const ReadinessCheck = () => {
   const [browserOk, setBrowserOk] = useState(null);
   const [speedOk, setSpeedOk] = useState(null);
   const [fullscreenOk, setFullscreenOk] = useState(false);
+  const [extensionsOk, setExtensionsOk] = useState(null);
+  const [detectedExtName, setDetectedExtName] = useState('');
 
   const [internetSpeed, setInternetSpeed] = useState('');
   const [mediaStream, setMediaStream] = useState(null);
@@ -62,7 +64,7 @@ const ReadinessCheck = () => {
     const hasVisibility = typeof document.visibilityState !== 'undefined';
     const hasFullscreen = typeof document.documentElement.requestFullscreen !== 'undefined';
     const hasMedia = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
-    
+
     if (hasVisibility && hasFullscreen && hasMedia) {
       setBrowserOk(true);
     } else {
@@ -96,18 +98,186 @@ const ReadinessCheck = () => {
   const requestScreenShare = async () => {
     setScreenOk(null);
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          displaySurface: "monitor"
+        }
+      });
+      const track = stream.getVideoTracks()[0];
+      const settings = track.getSettings();
+
+      // Enforce entire screen sharing (displaySurface must be "monitor")
+      if (settings.displaySurface && settings.displaySurface !== 'monitor') {
+        stream.getTracks().forEach(t => t.stop());
+        setScreenOk(false);
+        alert('Access Denied: You MUST share your ENTIRE SCREEN (not a single window or browser tab) to proceed with the exam.');
+        return;
+      }
+
       setScreenStream(stream);
       setScreenOk(true);
 
       // Add listener to check if student stops sharing
-      stream.getVideoTracks()[0].onended = () => {
+      track.onended = () => {
         setScreenOk(false);
       };
     } catch (err) {
       setScreenOk(false);
     }
   };
+
+  const detectExtensions = () => {
+    // blocklist for AI/malicious assistant extensions
+    const suspiciousKeywords = [
+      'sider', 'monica', 'grammarly', 'adblock', 'google-translate', 
+      'googletranslate', 'goog-gt', 'copilot', 'chatgpt'
+    ];
+
+    // 1. Check window objects for any matching global variable keys
+    try {
+      for (const key in window) {
+        const lowerKey = key.toLowerCase();
+        for (const keyword of suspiciousKeywords) {
+          if (lowerKey.includes(keyword)) {
+            return { detected: true, name: `Global variable: ${key}` };
+          }
+        }
+      }
+    } catch (e) {
+      // Ignored
+    }
+
+    // 2. Check for resource tags (scripts, stylesheets, frames) pointing to blocked extensions
+    try {
+      const resources = document.querySelectorAll('script, link, img, iframe, source');
+      for (const el of resources) {
+        const src = el.src || '';
+        const href = el.href || '';
+        const url = (src || href).toLowerCase();
+        if (url.includes('extension:') || url.includes('chrome-extension:') ||
+            url.includes('moz-extension:') || url.includes('edge-extension:')) {
+          // Only block if the asset belongs to one of the suspicious extensions
+          for (const keyword of suspiciousKeywords) {
+            if (url.includes(keyword)) {
+              return { detected: true, name: `Asset: ${src || href}` };
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // Ignored
+    }
+
+    // 3. Check CSS Rules for injected extension stylesheets
+    try {
+      for (let i = 0; i < document.styleSheets.length; i++) {
+        try {
+          const sheet = document.styleSheets[i];
+          const rules = sheet.cssRules || sheet.rules;
+          if (rules) {
+            for (let j = 0; j < rules.length; j++) {
+              const cssText = rules[j].cssText.toLowerCase();
+              for (const keyword of suspiciousKeywords) {
+                if (cssText.includes(keyword)) {
+                  return { detected: true, name: `CSS Style Rule containing: ${keyword}` };
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // Cross-origin stylesheet security exception - ignore
+        }
+      }
+    } catch (e) {
+      // Ignored
+    }
+
+    // 4. Recursive deep scanner of DOM and Shadow DOM roots
+    const scanNode = (node) => {
+      if (!node) return null;
+
+      // Check element tag name
+      const tagName = node.tagName ? node.tagName.toLowerCase() : '';
+      for (const keyword of suspiciousKeywords) {
+        if (tagName.includes(keyword)) {
+          return { detected: true, name: `<${tagName}> element` };
+        }
+      }
+
+      // Check element ID and classes
+      const id = node.id ? node.id.toLowerCase() : '';
+      const className = typeof node.className === 'string' ? node.className.toLowerCase() : '';
+      for (const keyword of suspiciousKeywords) {
+        if (id.includes(keyword)) {
+          return { detected: true, name: `Element ID: ${node.id}` };
+        }
+        if (className.includes(keyword)) {
+          return { detected: true, name: `Element Class: ${node.className}` };
+        }
+      }
+
+      // Check element attributes
+      if (node.attributes) {
+        for (let i = 0; i < node.attributes.length; i++) {
+          const attr = node.attributes[i];
+          const attrName = attr.name.toLowerCase();
+          const attrVal = attr.value.toLowerCase();
+          for (const keyword of suspiciousKeywords) {
+            if (attrName.includes(keyword) || attrVal.includes(keyword)) {
+              return { detected: true, name: `Element attribute [${attr.name}="${attr.value}"]` };
+            }
+          }
+        }
+      }
+
+      // Recurse light DOM children
+      if (node.children) {
+        for (let i = 0; i < node.children.length; i++) {
+          const result = scanNode(node.children[i]);
+          if (result) return result;
+        }
+      }
+
+      // Recurse shadow DOM children if open shadowRoot exists
+      if (node.shadowRoot) {
+        const shadowResult = scanNode(node.shadowRoot);
+        if (shadowResult) return shadowResult;
+        if (node.shadowRoot.children) {
+          for (let i = 0; i < node.shadowRoot.children.length; i++) {
+            const result = scanNode(node.shadowRoot.children[i]);
+            if (result) return result;
+          }
+        }
+      }
+
+      return null;
+    };
+
+    // Start deep scan from html root
+    const domScanResult = scanNode(document.documentElement);
+    if (domScanResult) {
+      return domScanResult;
+    }
+
+    return { detected: false };
+  };
+
+  // Continuous monitoring loop for active browser extensions
+  useEffect(() => {
+    const scan = () => {
+      const result = detectExtensions();
+      if (result.detected) {
+        setExtensionsOk(false);
+        setDetectedExtName(result.name);
+      } else {
+        setExtensionsOk(true);
+        setDetectedExtName('');
+      }
+    };
+    scan();
+    const interval = setInterval(scan, 2000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Enforce Fullscreen Mode
   const enterFullscreen = async () => {
@@ -139,7 +309,16 @@ const ReadinessCheck = () => {
   }, []);
 
   const handleStartExam = async () => {
-    if (!cameraOk || !micOk || !screenOk || !browserOk || !speedOk || !fullscreenOk) {
+    // Prevent starting the exam if extensions are detected
+    const extCheck = detectExtensions();
+    if (extCheck.detected) {
+      setExtensionsOk(false);
+      setDetectedExtName(extCheck.name);
+      alert(`Access Blocked: Active browser extension detected (${extCheck.name}). Please disable or remove extensions before launching the examination.`);
+      return;
+    }
+
+    if (!cameraOk || !micOk || !screenOk || !browserOk || !speedOk || !fullscreenOk || !extensionsOk) {
       alert('Please complete and pass all readiness checks before proceeding.');
       return;
     }
@@ -162,7 +341,7 @@ const ReadinessCheck = () => {
     }
   };
 
-  const allPassed = cameraOk && micOk && screenOk && browserOk && speedOk && fullscreenOk;
+  const allPassed = cameraOk && micOk && screenOk && browserOk && speedOk && fullscreenOk && extensionsOk;
 
   if (loading) {
     return (
@@ -175,11 +354,11 @@ const ReadinessCheck = () => {
   return (
     <div class="min-h-screen bg-[#F8FAFC] py-12 px-6 flex flex-col justify-between">
       <div class="max-w-3xl mx-auto w-full space-y-6 flex-1">
-        
+
         {/* Header */}
         <div class="flex items-center justify-between border-b border-slate-200/60 pb-5">
           <div class="flex items-center space-x-3">
-            <button 
+            <button
               onClick={() => navigate('/student/dashboard')}
               class="p-2 hover:bg-slate-100 rounded-xl text-slate-500 hover:text-slate-900 transition-colors"
             >
@@ -203,7 +382,7 @@ const ReadinessCheck = () => {
 
         {/* Check items */}
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          
+
           {/* Camera Permission Check */}
           <div class="bg-white border border-slate-100 p-5 rounded-2xl shadow-card flex items-center justify-between">
             <div class="flex items-center space-x-4">
@@ -325,6 +504,30 @@ const ReadinessCheck = () => {
             )}
           </div>
 
+          {/* Browser Extension Check */}
+          <div class="bg-white border border-slate-100 p-5 rounded-2xl shadow-card flex items-center justify-between">
+            <div class="flex items-center space-x-4">
+              <div class={`p-3 rounded-xl ${extensionsOk === true ? 'bg-emerald-50 text-emerald-600' : extensionsOk === false ? 'bg-rose-50 text-rose-600' : 'bg-slate-50 text-slate-500'}`}>
+                <Puzzle class="w-5 h-5" />
+              </div>
+              <div>
+                <h4 class="text-sm font-bold text-slate-800">Browser Extensions</h4>
+                <p class="text-[11px] text-slate-500 font-medium">
+                  {extensionsOk === false
+                    ? `Conflict detected: disable extensions (e.g. ${detectedExtName})`
+                    : 'Checks for active extension interfaces.'}
+                </p>
+              </div>
+            </div>
+            {extensionsOk === true ? (
+              <span class="text-xs font-bold text-emerald-600 font-semibold">Clean (Passed)</span>
+            ) : extensionsOk === false ? (
+              <span class="text-xs font-bold text-rose-600 animate-pulse font-semibold">Disable Extensions</span>
+            ) : (
+              <span class="text-xs font-bold text-slate-400">Scanning...</span>
+            )}
+          </div>
+
         </div>
 
         {/* Warning banner */}
@@ -343,11 +546,10 @@ const ReadinessCheck = () => {
         <button
           onClick={handleStartExam}
           disabled={!allPassed}
-          className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold text-sm shadow-lg transition-all ${
-            allPassed 
-              ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/10 hover:shadow-emerald-600/20' 
+          className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold text-sm shadow-lg transition-all ${allPassed
+              ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/10 hover:shadow-emerald-600/20'
               : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
-          }`}
+            }`}
         >
           <span>Start Assessment</span>
           <ArrowRight class="w-4 h-4" />

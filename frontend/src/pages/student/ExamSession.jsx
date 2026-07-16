@@ -28,11 +28,13 @@ const ExamSession = () => {
   const [saving, setSaving] = useState(false);
 
   // Fullscreen lockdown states
-  const [isLocked, setIsLocked] = useState(!document.fullscreenElement);
-  const hasEnteredFs = useRef(false);
+  // Fullscreen lock state
+  const [isFullscreenLocked, setIsFullscreenLocked] = useState(false);
   const videoRef = useRef(null);
+  const hasRequestedFs = useRef(false);
 
   // Bind camera stream only when mounts or changes to prevent re-render blinking
+  // Ensure video stream is attached
   useEffect(() => {
     if (videoRef.current && stream) {
       if (videoRef.current.srcObject !== stream) {
@@ -40,6 +42,122 @@ const ExamSession = () => {
       }
     }
   }, [stream]);
+
+  // Request fullscreen when exam data is ready
+  useEffect(() => {
+    if (!hasRequestedFs.current && assessmentDetails) {
+      const elem = document.documentElement;
+      if (!document.fullscreenElement) {
+        elem.requestFullscreen().catch(() => {});
+        setIsFullscreenLocked(true);
+        hasRequestedFs.current = true;
+      }
+    }
+  }, [assessmentDetails]);
+
+  // Re‑enter fullscreen if user exits it
+  useEffect(() => {
+  const handleFsChange = () => {
+    if (document.fullscreenElement) {
+      // User is in fullscreen, remove lock overlay
+      setIsFullscreenLocked(false);
+    } else {
+      // User exited fullscreen, show lock overlay and record violation
+      setIsFullscreenLocked(true);
+      if (recordViolation) {
+        recordViolation('FULLSCREEN_EXIT', 'User exited fullscreen mode');
+      }
+    }
+  };
+  document.addEventListener('fullscreenchange', handleFsChange);
+  return () => document.removeEventListener('fullscreenchange', handleFsChange);
+}, [recordViolation]);
+
+  // Detect tab/visibility changes and Esc key
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.hidden && isFullscreenLocked) {
+        if (recordViolation) {
+          recordViolation('TAB_SWITCH', 'User switched tabs or minimized window');
+        }
+      }
+    };
+    const handleKey = (e) => {
+      if (e.key === 'Escape' && isFullscreenLocked) {
+        // Re‑enter fullscreen immediately
+        document.documentElement.requestFullscreen().catch(() => {});
+        if (recordViolation) {
+          recordViolation('FULLSCREEN_ESCAPE', 'User pressed Escape to leave fullscreen');
+        }
+        e.preventDefault();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('keydown', handleKey);
+    };
+  }, [isFullscreenLocked, recordViolation]);
+
+  // Detect split‑screen or window resize that reduces the viewport below full screen dimensions
+  useEffect(() => {
+    const handleResize = () => {
+      if (document.fullscreenElement) {
+        const isReduced = window.innerWidth < screen.width || window.innerHeight < screen.height;
+        if (isReduced) {
+          // Record violation and lock the UI
+          if (recordViolation) recordViolation('SPLIT_SCREEN', 'User attempted split‑screen or resized window');
+          setIsFullscreenLocked(true);
+          // Attempt to re‑enter fullscreen (user must click the button)
+          document.exitFullscreen().catch(() => {});
+        }
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [recordViolation]);
+
+  // Strict security: block drag‑and‑drop, context menu, copy/paste, and dev‑tools shortcuts
+  useEffect(() => {
+    const handleDragOver = (e) => e.preventDefault();
+    const handleDrop = (e) => {
+      e.preventDefault();
+      if (recordViolation) recordViolation('DRAG_DROP', 'Attempted drag-and-drop operation');
+    };
+    const handleContextMenu = (e) => {
+      e.preventDefault();
+      if (recordViolation) recordViolation('RIGHT_CLICK', 'Attempted right-click');
+    };
+    const handleCopyPaste = (e) => {
+      e.preventDefault();
+      if (recordViolation) recordViolation('COPY_PASTE', 'Attempted copy/paste operation');
+    };
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'i') || e.key === 'F12') {
+        e.preventDefault();
+        if (recordViolation) recordViolation('DEVTOOLS', 'Attempted to open developer tools');
+      }
+    };
+    document.addEventListener('dragover', handleDragOver);
+    document.addEventListener('drop', handleDrop);
+    document.addEventListener('contextmenu', handleContextMenu);
+    document.addEventListener('copy', handleCopyPaste);
+    document.addEventListener('cut', handleCopyPaste);
+    document.addEventListener('paste', handleCopyPaste);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('dragover', handleDragOver);
+      document.removeEventListener('drop', handleDrop);
+      document.removeEventListener('contextmenu', handleContextMenu);
+      document.removeEventListener('copy', handleCopyPaste);
+      document.removeEventListener('cut', handleCopyPaste);
+      document.removeEventListener('paste', handleCopyPaste);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [recordViolation]);
 
   // Internet connection states
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -101,21 +219,22 @@ const ExamSession = () => {
             await api.post(`/exams/sessions/${id}/submit?status=FORCE_SUBMITTED`);
           }
         } catch (e) {}
+        // Exit fullscreen after successful submission
         if (document.fullscreenElement) {
           document.exitFullscreen().catch(() => {});
+          setIsFullscreenLocked(false);
         }
+        setIsFullscreenLocked(false);
         navigate('/student/dashboard?violation=true');
       };
       executeAutoSubmit();
       return;
     }
 
-    const timer = setTimeout(() => {
-      setCountdown(prev => prev - 1);
-    }, 1000);
+    const timer = setTimeout(() => setCountdown(prev => prev - 1), 1000);
 
     return () => clearTimeout(timer);
-  }, [isAutoSubmitting, countdown, id, navigate]);
+  }, [isAutoSubmitting, countdown, id, navigate, setIsFullscreenLocked]);
 
   // Compiler states
   const [compiling, setCompiling] = useState(false);
@@ -259,23 +378,7 @@ const ExamSession = () => {
     if (q?.programmingLanguage) setSelectedLanguage(q.programmingLanguage);
   }, [currentIndex, answers]);
 
-  // Fullscreen exit warning listener
-  useEffect(() => {
-    const handleFsChange = () => {
-      if (!document.fullscreenElement) {
-        setIsLocked(true);
-        if (hasEnteredFs.current && recordViolation) {
-          recordViolation('FULLSCREEN_EXIT', 'Student exited fullscreen exam layout.');
-        }
-      } else {
-        setIsLocked(false);
-        hasEnteredFs.current = true;
-      }
-    };
 
-    document.addEventListener('fullscreenchange', handleFsChange);
-    return () => document.removeEventListener('fullscreenchange', handleFsChange);
-  }, [answers, studentAnswers, currentIndex, timerSeconds, recordViolation]);
 
   // Load Exam Session details
   const fetchSessionData = async () => {
@@ -493,7 +596,7 @@ const ExamSession = () => {
     <div class="min-h-screen bg-[#F8FAFC] flex flex-col justify-between font-sans">
       
       {/* Enforced Fullscreen Lockout Overlay */}
-      {isLocked && (
+      {isFullscreenLocked && (
         <div class="fixed inset-0 z-[100] bg-[#0F172A]/80 backdrop-blur-md flex items-center justify-center p-6 text-center select-none font-sans">
           <div class="max-w-md bg-white border border-slate-100 p-8 rounded-2xl shadow-premium space-y-6 animate-in zoom-in duration-200">
             <AlertTriangle class="w-12 h-12 text-red-500 mx-auto animate-bounce" />
@@ -510,7 +613,7 @@ const ExamSession = () => {
                   } else if (el.webkitRequestFullscreen) {
                     await el.webkitRequestFullscreen();
                   }
-                  setIsLocked(false);
+                  setIsFullscreenLocked(false);
                 } catch (e) {
                   alert("Fullscreen registration failed. Please click and grant permissions.");
                 }
@@ -545,10 +648,25 @@ const ExamSession = () => {
             </div>
 
             <button
-              onClick={() => setActiveWarning(null)}
+              onClick={async () => {
+                setActiveWarning(null);
+                try {
+                  const el = document.documentElement;
+                  if (!document.fullscreenElement) {
+                    if (el.requestFullscreen) {
+                      await el.requestFullscreen();
+                    } else if (el.webkitRequestFullscreen) {
+                      await el.webkitRequestFullscreen();
+                    }
+                    setIsFullscreenLocked(false);
+                  }
+                } catch (e) {
+                  console.error("Fullscreen request failed", e);
+                }
+              }}
               class="w-full py-2.5 bg-[#0F172A] hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition-all shadow-md"
             >
-              OK, I Understand
+              OK, I Understand & Re-enter Fullscreen
             </button>
           </div>
         </div>
@@ -633,8 +751,8 @@ const ExamSession = () => {
           </div>
 
           <button
-            onClick={() => handleSubmitExam(false)}
-            class="flex items-center space-x-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-lg shadow-emerald-600/10 transition-all shrink-0 animate-in fade-in"
+            onClick={() => handleSubmitExam(false)} disabled={isFullscreenLocked}
+            class="flex items-center space-x-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-lg shadow-emerald-600/10 transition-all shrink-0 animate-in fade-in disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-slate-400 disabled:hover:bg-slate-400 disabled:shadow-none"
           >
             <Send class="w-4 h-4" />
             <span>Submit Exam</span>
@@ -745,17 +863,12 @@ const ExamSession = () => {
                         </button>
                       );
                     })}
-                    {/* Show user's answer vs correct answer */}
+                    {/* Show user's answer */}
                     <div class="mt-4 p-3 bg-slate-50 border border-slate-100 rounded-lg text-xs">
                       <div class="mb-2 text-[11px] font-bold text-slate-600">Your Answer:</div>
-                      <div class="mb-3 text-sm font-medium text-slate-800">{
+                      <div class="text-sm font-medium text-slate-800">{
                         studentAnswers[currentQuestion.id] !== undefined && studentAnswers[currentQuestion.id] !== null
                           ? JSON.parse(currentQuestion.optionsJson)[Number(studentAnswers[currentQuestion.id])] : 'Not answered'
-                      }</div>
-
-                      <div class="mb-2 text-[11px] font-bold text-slate-600">Correct Answer:</div>
-                      <div class="text-sm font-medium text-emerald-700">{
-                        currentQuestion.correctAnswerJson ? JSON.parse(currentQuestion.optionsJson)[Number(currentQuestion.correctAnswerJson)] : 'N/A'
                       }</div>
                     </div>
                   </div>

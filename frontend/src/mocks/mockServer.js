@@ -263,6 +263,213 @@ seedIfEmpty(MOCK_DB.questions,
   }
 );
 
+const runMockCompilation = (language, source, testCases, preview = false) => {
+  const tcsToRun = preview ? (testCases.length > 0 ? [testCases[0]] : []) : testCases;
+
+  const runJavascript = (src, inputStr) => {
+    const logs = [];
+    const localConsole = {
+      log: (...args) => {
+        logs.push(args.map(x => typeof x === 'object' ? JSON.stringify(x) : String(x)).join(' '));
+      }
+    };
+
+    const fnMatch = src.match(/function\s+([a-zA-Z0-9_$]+)/) || src.match(/(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*/);
+    const fnName = fnMatch ? fnMatch[1] : null;
+
+    if (fnName) {
+      const userScope = {};
+      new Function('console', `
+        ${src}
+        userScope.run = ${fnName};
+      `)(localConsole);
+
+      const fn = userScope.run;
+      let arg;
+      try {
+        arg = JSON.parse(inputStr);
+      } catch (e) {
+        if (!isNaN(inputStr) && inputStr.trim() !== '') arg = Number(inputStr);
+        else arg = inputStr;
+      }
+
+      const isLinkedList = src.toLowerCase().includes('linked') || src.toLowerCase().includes('head');
+      if (isLinkedList && Array.isArray(arg)) {
+        const arrayToLL = (arr) => {
+          if (!arr || arr.length === 0) return null;
+          const h = { val: arr[0], next: null };
+          let c = h;
+          for (let i = 1; i < arr.length; i++) {
+            c.next = { val: arr[i], next: null };
+            c = c.next;
+          }
+          return h;
+        };
+        arg = arrayToLL(arg);
+      }
+
+      let res = fn(arg);
+
+      if (isLinkedList && res && (res.val !== undefined || res.next !== undefined)) {
+        const llToArr = (h) => {
+          const arr = [];
+          let c = h;
+          while (c) {
+            arr.push(c.val !== undefined ? c.val : c.value);
+            c = c.next;
+          }
+          return arr;
+        };
+        res = llToArr(res);
+      }
+
+      let outputText = "";
+      if (res !== undefined) {
+        outputText = typeof res === 'object' ? JSON.stringify(res) : String(res);
+      } else if (logs.length > 0) {
+        outputText = logs.join('\n');
+      }
+      return { output: outputText, logs: logs.join('\n') };
+    } else {
+      // Script-mode execution
+      const userScript = new Function('console', `
+        return (function() {
+          ${src}
+        })();
+      `);
+      const res = userScript(localConsole);
+      let outputText = "";
+      if (res !== undefined) {
+        outputText = typeof res === 'object' ? JSON.stringify(res) : String(res);
+      } else if (logs.length > 0) {
+        outputText = logs.join('\n');
+      }
+      return { output: outputText, logs: logs.join('\n') };
+    }
+  };
+
+  if (language === 'javascript' || language === 'js') {
+    try {
+      const results = tcsToRun.map((tc, idx) => {
+        try {
+          const runRes = runJavascript(source, tc.input);
+          const actual = runRes.output.trim();
+          const expected = (tc.output || '').trim();
+          return {
+            input: tc.input,
+            expected: tc.output,
+            actual: runRes.output,
+            passed: actual === expected,
+            hidden: idx >= 2
+          };
+        } catch (e) {
+          return {
+            input: tc.input,
+            expected: tc.output,
+            actual: '[ERROR] ' + e.message,
+            passed: false,
+            hidden: idx >= 2
+          };
+        }
+      });
+      return { compiled: true, results };
+    } catch (e) {
+      return { compiled: false, errors: '[MOCK] Javascript Error: ' + e.message };
+    }
+  } else if (language === 'python' || language === 'py') {
+    try {
+      let executableJS = source
+        .replace(/def\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\):/g, 'function $1($2) {')
+        .replace(/print\(([^)]+)\)/g, 'console.log($1)')
+        .replace(/elif\s+/g, 'else if ')
+        .replace(/True/g, 'true')
+        .replace(/False/g, 'false')
+        .replace(/None/g, 'null');
+
+      if (!source.includes('def ') && !source.includes('print(')) {
+        executableJS = 'console.log(' + source.trim() + ')';
+      }
+
+      const results = tcsToRun.map((tc, idx) => {
+        try {
+          const runRes = runJavascript(executableJS, tc.input);
+          const actual = runRes.output.trim();
+          const expected = (tc.output || '').trim();
+          return {
+            input: tc.input,
+            expected: tc.output,
+            actual: runRes.output,
+            passed: actual === expected,
+            hidden: idx >= 2
+          };
+        } catch (e) {
+          return {
+            input: tc.input,
+            expected: tc.output,
+            actual: '[ERROR] ' + e.message,
+            passed: false,
+            hidden: idx >= 2
+          };
+        }
+      });
+      return { compiled: true, results };
+    } catch (e) {
+      return { compiled: false, errors: '[MOCK] Python Translation Error: ' + e.message };
+    }
+  } else if (language === 'java') {
+    try {
+      let executableJS = source
+        .replace(/package\s+[a-zA-Z0-9_.]+;/g, '')
+        .replace(/import\s+[a-zA-Z0-9_.]+;/g, '')
+        .replace(/\b(public|private|protected|static|final)\b/g, '')
+        .replace(/System\.out\.print(?:ln)?\(([^)]*)\);?/g, 'console.log($1)')
+        .replace(/class\s+[a-zA-Z0-9_$]+\s*\{[^]*?void\s+main\s*\([^)]*\)\s*\{([^]*?)\}\s*\}/g, '$1')
+        .replace(/\b(int|double|float|String|boolean|void|char|long|short|byte)\b/g, 'var')
+        .replace(/new\s+int\s*\[\s*\]\s*\{([^}]*)\}/g, '[$1]')
+        .replace(/new\s+String\s*\[\s*\]\s*\{([^}]*)\}/g, '[$1]');
+
+      if (!source.includes('class ') && !source.includes('System.out.print')) {
+        executableJS = 'console.log(' + source.trim().replace(/;$/, '') + ')';
+      }
+
+      const results = tcsToRun.map((tc, idx) => {
+        try {
+          const runRes = runJavascript(executableJS, tc.input);
+          const actual = runRes.output.trim();
+          const expected = (tc.output || '').trim();
+          return {
+            input: tc.input,
+            expected: tc.output,
+            actual: runRes.output,
+            passed: actual === expected,
+            hidden: idx >= 2
+          };
+        } catch (e) {
+          return {
+            input: tc.input,
+            expected: tc.output,
+            actual: '[ERROR] ' + e.message,
+            passed: false,
+            hidden: idx >= 2
+          };
+        }
+      });
+      return { compiled: true, results };
+    } catch (e) {
+      return { compiled: false, errors: '[MOCK] Java Translation Error: ' + e.message };
+    }
+  } else {
+    const results = tcsToRun.map((tc, idx) => ({
+      input: tc.input,
+      expected: tc.output,
+      actual: tc.output,
+      passed: true,
+      hidden: idx >= 2
+    }));
+    return { compiled: true, results };
+  }
+};
+
 const mockServer = {
   get: async (url) => {
     // Departments by college
@@ -434,212 +641,7 @@ const mockServer = {
       }
 
       const preview = data.preview === true;
-      const tcsToRun = preview ? (testCases.length > 0 ? [testCases[0]] : []) : testCases;
-
-      // Execution helper for Javascript in browser
-      const runJavascript = (src, inputStr) => {
-        const logs = [];
-        const localConsole = {
-          log: (...args) => {
-            logs.push(args.map(x => typeof x === 'object' ? JSON.stringify(x) : String(x)).join(' '));
-          }
-        };
-
-        const fnMatch = src.match(/function\s+([a-zA-Z0-9_$]+)/) || src.match(/(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*/);
-        const fnName = fnMatch ? fnMatch[1] : null;
-
-        if (fnName) {
-          const userScope = {};
-          new Function('console', `
-            ${src}
-            userScope.run = ${fnName};
-          `)(localConsole);
-
-          const fn = userScope.run;
-          let arg;
-          try {
-            arg = JSON.parse(inputStr);
-          } catch (e) {
-            if (!isNaN(inputStr) && inputStr.trim() !== '') arg = Number(inputStr);
-            else arg = inputStr;
-          }
-
-          const isLinkedList = src.toLowerCase().includes('linked') || src.toLowerCase().includes('head');
-          if (isLinkedList && Array.isArray(arg)) {
-            const arrayToLL = (arr) => {
-              if (!arr || arr.length === 0) return null;
-              const h = { val: arr[0], next: null };
-              let c = h;
-              for (let i = 1; i < arr.length; i++) {
-                c.next = { val: arr[i], next: null };
-                c = c.next;
-              }
-              return h;
-            };
-            arg = arrayToLL(arg);
-          }
-
-          let res = fn(arg);
-
-          if (isLinkedList && res && (res.val !== undefined || res.next !== undefined)) {
-            const llToArr = (h) => {
-              const arr = [];
-              let c = h;
-              while (c) {
-                arr.push(c.val !== undefined ? c.val : c.value);
-                c = c.next;
-              }
-              return arr;
-            };
-            res = llToArr(res);
-          }
-
-          let outputText = "";
-          if (res !== undefined) {
-            outputText = typeof res === 'object' ? JSON.stringify(res) : String(res);
-          } else if (logs.length > 0) {
-            outputText = logs.join('\n');
-          }
-          return { output: outputText, logs: logs.join('\n') };
-        } else {
-          // Script-mode execution
-          const userScript = new Function('console', `
-            return (function() {
-              ${src}
-            })();
-          `);
-          const res = userScript(localConsole);
-          let outputText = "";
-          if (res !== undefined) {
-            outputText = typeof res === 'object' ? JSON.stringify(res) : String(res);
-          } else if (logs.length > 0) {
-            outputText = logs.join('\n');
-          }
-          return { output: outputText, logs: logs.join('\n') };
-        }
-      };
-
-      if (language === 'javascript' || language === 'js') {
-        try {
-          const results = tcsToRun.map((tc, idx) => {
-            try {
-              const runRes = runJavascript(source, tc.input);
-              const actual = runRes.output.trim();
-              const expected = (tc.output || '').trim();
-              return {
-                input: tc.input,
-                expected: tc.output,
-                actual: runRes.output,
-                passed: actual === expected,
-                hidden: idx >= 2
-              };
-            } catch (e) {
-              return {
-                input: tc.input,
-                expected: tc.output,
-                actual: '[ERROR] ' + e.message,
-                passed: false,
-                hidden: idx >= 2
-              };
-            }
-          });
-          return { compiled: true, results };
-        } catch (e) {
-          return { compiled: false, errors: '[MOCK] Javascript Error: ' + e.message };
-        }
-      } else if (language === 'python' || language === 'py') {
-        try {
-          let executableJS = source
-            .replace(/def\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\):/g, 'function $1($2) {')
-            .replace(/print\(([^)]+)\)/g, 'console.log($1)')
-            .replace(/elif\s+/g, 'else if ')
-            .replace(/True/g, 'true')
-            .replace(/False/g, 'false')
-            .replace(/None/g, 'null');
-
-          // If no function definition, treat as script mode and wrap with console.log
-          if (!source.includes('def ') && !source.includes('print(')) {
-            executableJS = 'console.log(' + source.trim() + ')';
-          }
-
-          const results = tcsToRun.map((tc, idx) => {
-            try {
-              const runRes = runJavascript(executableJS, tc.input);
-              const actual = runRes.output.trim();
-              const expected = (tc.output || '').trim();
-              return {
-                input: tc.input,
-                expected: tc.output,
-                actual: runRes.output,
-                passed: actual === expected,
-                hidden: idx >= 2
-              };
-            } catch (e) {
-              return {
-                input: tc.input,
-                expected: tc.output,
-                actual: '[ERROR] ' + e.message,
-                passed: false,
-                hidden: idx >= 2
-              };
-            }
-          });
-          return { compiled: true, results };
-        } catch (e) {
-          return { compiled: false, errors: '[MOCK] Python Translation Error: ' + e.message };
-        }
-      } else if (language === 'java') {
-        try {
-          let executableJS = source
-            .replace(/package\s+[a-zA-Z0-9_.]+;/g, '')
-            .replace(/import\s+[a-zA-Z0-9_.]+;/g, '')
-            .replace(/\b(public|private|protected|static|final)\b/g, '')
-            .replace(/System\.out\.print(?:ln)?\(([^)]*)\);?/g, 'console.log($1)')
-            .replace(/class\s+[a-zA-Z0-9_$]+\s*\{[^]*?void\s+main\s*\([^)]*\)\s*\{([^]*?)\}\s*\}/g, '$1')
-            .replace(/\b(int|double|float|String|boolean|void|char|long|short|byte)\b/g, 'var')
-            .replace(/new\s+int\s*\[\s*\]\s*\{([^}]*)\}/g, '[$1]')
-            .replace(/new\s+String\s*\[\s*\]\s*\{([^}]*)\}/g, '[$1]');
-
-          // Wrap simple expressions in console.log
-          if (!source.includes('class ') && !source.includes('System.out.print')) {
-            executableJS = 'console.log(' + source.trim().replace(/;$/, '') + ')';
-          }
-
-          const results = tcsToRun.map((tc, idx) => {
-            try {
-              const runRes = runJavascript(executableJS, tc.input);
-              const actual = runRes.output.trim();
-              const expected = (tc.output || '').trim();
-              return {
-                input: tc.input,
-                expected: tc.output,
-                actual: runRes.output,
-                passed: actual === expected,
-                hidden: idx >= 2
-              };
-            } catch (e) {
-              return {
-                input: tc.input,
-                expected: tc.output,
-                actual: '[ERROR] ' + e.message,
-                passed: false,
-                hidden: idx >= 2
-              };
-            }
-          });
-          return { compiled: true, results };
-        } catch (e) {
-          return { compiled: false, errors: '[MOCK] Java Translation Error: ' + e.message };
-        }
-      } else {
-        return tcsToRun.map((tc, idx) => ({
-          input: tc.input,
-          expected: tc.output,
-          actual: tc.output,
-          passed: true,
-          hidden: idx >= 2
-        }));
-      }
+      return runMockCompilation(language, source, testCases, preview);
     }
 
     if (path === '/auth/refresh') {
@@ -780,10 +782,23 @@ const mockServer = {
               ans.isCorrect = false;
             }
           } else if (q.questionType === 'PROGRAMMING') {
-            // assume mock compiler passed if student submitted code
-            if (ans.studentAnswerJson && ans.studentAnswerJson.trim() !== '') {
-              ans.marksObtained = q.marks || 0;
-              ans.isCorrect = true;
+            const studentCode = ans.studentAnswerJson || '';
+            const testCases = q.testCasesJson ? JSON.parse(q.testCasesJson) : [];
+            if (testCases.length > 0 && studentCode.trim() !== '') {
+              const execRes = runMockCompilation(q.programmingLanguage || 'javascript', studentCode, testCases);
+              if (execRes.compiled) {
+                const passedAll = execRes.results.every(r => r.passed);
+                if (passedAll && execRes.results.length > 0) {
+                  ans.marksObtained = q.marks || 0;
+                  ans.isCorrect = true;
+                } else {
+                  ans.marksObtained = 0;
+                  ans.isCorrect = false;
+                }
+              } else {
+                ans.marksObtained = 0;
+                ans.isCorrect = false;
+              }
             } else {
               ans.marksObtained = 0;
               ans.isCorrect = false;

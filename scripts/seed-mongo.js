@@ -30,13 +30,112 @@ const MOCK = {
     { id: 'd-CHEM', name: 'CHEM', collegeId: 'c-1' }
   ],
   courses: [
-    { id: 'course-1', name: 'Bachelor of Technology', departmentId: 'd-CSE' }
+    { id: 'course-1', name: 'Bachelor of Technology', departmentId: 'd-CSE' },
+    { id: 'course-it', name: 'Bachelor of Technology (IT)', departmentId: 'd-IT' }
   ],
   subjects: [
-    { id: 'subj-ds', name: 'Data Structures and Algorithms', courseId: 'course-1' }
+    { id: 'subj-ds', name: 'Data Structures and Algorithms', courseId: 'course-1' },
+    { id: 'subj-ds-it', name: 'Data Structures and Algorithms', courseId: 'course-it' }
   ],
-  assessments: [],
-  questions: [],
+  assessments: [
+    {
+      id: 'demo-exam-1',
+      title: 'Data Structures Midterm',
+      subjectId: 'subj-ds-it',
+      subject: { id: 'subj-ds-it', name: 'Data Structures and Algorithms' },
+      durationMinutes: 90,
+      passingMarks: 40,
+      totalMarks: 100,
+      status: 'ACTIVE',
+      collegeId: 'c-1',
+      departmentId: 'd-IT',
+      createdBy: 'u-faculty-1',
+      maxWarnings: 3
+    },
+    {
+      id: 'demo-exam-2',
+      title: 'Java Programming & OOP Quiz',
+      subjectId: 'subj-ds-it',
+      subject: { id: 'subj-ds-it', name: 'Data Structures and Algorithms' },
+      durationMinutes: 45,
+      passingMarks: 20,
+      totalMarks: 50,
+      status: 'ACTIVE',
+      collegeId: 'c-1',
+      departmentId: 'd-IT',
+      createdBy: 'u-faculty-1',
+      maxWarnings: 3
+    }
+  ],
+  questions: [
+    {
+      id: 'q-101',
+      assessmentId: 'demo-exam-1',
+      subjectId: 'subj-ds-it',
+      questionText: "What is the average time complexity of searching in a balanced Binary Search Tree (BST)?",
+      questionType: "OBJECTIVE",
+      difficulty: "EASY",
+      marks: 30,
+      optionsJson: JSON.stringify(["O(N)", "O(log N)", "O(N log N)", "O(1)"]),
+      correctAnswerJson: "1"
+    },
+    {
+      id: 'q-102',
+      assessmentId: 'demo-exam-1',
+      subjectId: 'subj-ds-it',
+      questionText: "Explain the difference between a Stack and a Queue in terms of insert/remove ordering.",
+      questionType: "SHORT_ANSWER",
+      difficulty: "MEDIUM",
+      marks: 30,
+      correctAnswerJson: "FIFO, LIFO, linear, push, pop"
+    },
+    {
+      id: 'q-103',
+      assessmentId: 'demo-exam-1',
+      subjectId: 'subj-ds-it',
+      questionText: "Write a function in Javascript that reverses a singly linked list.",
+      questionType: "PROGRAMMING",
+      programmingLanguage: "javascript",
+      difficulty: "HARD",
+      marks: 40,
+      correctAnswerJson: "function reverse(head) { ... }",
+      testCasesJson: JSON.stringify([
+        { input: "[1, 2, 3]", output: "[3, 2, 1]" },
+        { input: "[5]", output: "[5]" },
+        { input: "[]", output: "[]" },
+        { input: "[10, 20, 30, 40]", output: "[40, 30, 20, 10]" }
+      ])
+    },
+    {
+      id: 'q-201',
+      assessmentId: 'demo-exam-2',
+      subjectId: 'subj-ds-it',
+      questionText: "Which of the following is NOT an OOP feature in Java?",
+      questionType: "OBJECTIVE",
+      difficulty: "EASY",
+      marks: 20,
+      optionsJson: JSON.stringify(["Inheritance", "Polymorphism", "Compilation", "Encapsulation"]),
+      correctAnswerJson: "2"
+    },
+    {
+      id: 'q-202',
+      assessmentId: 'demo-exam-2',
+      subjectId: 'subj-ds-it',
+      questionText: "Write a function in Java/Javascript that returns the factorial of a given number.",
+      questionType: "PROGRAMMING",
+      programmingLanguage: "javascript",
+      difficulty: "MEDIUM",
+      marks: 30,
+      correctAnswerJson: "function factorial(n) { ... }",
+      testCasesJson: JSON.stringify([
+        { input: "5", output: "120" },
+        { input: "0", output: "1" },
+        { input: "3", output: "6" },
+        { input: "10", output: "3628800" },
+        { input: "1", output: "1" }
+      ])
+    }
+  ],
   sessions: []
 };
 

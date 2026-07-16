@@ -3,7 +3,7 @@ import DashboardLayout from '../../layouts/DashboardLayout';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
 import { 
-  Building2, Users, GraduationCap, BookOpen, Plus, Search, Edit3, Trash2, HelpCircle, AlertCircle, FileText
+  Building2, Users, GraduationCap, BookOpen, Plus, Search, Edit3, Trash2, HelpCircle, AlertCircle, FileText, Upload
 } from 'lucide-react';
 
 const QuestionBank = () => {
@@ -37,6 +37,15 @@ const QuestionBank = () => {
   const [formLang, setFormLang] = useState('java');
   const [formTestCases, setFormTestCases] = useState([{ input: '', output: '' }]);
   const [submitLoading, setSubmitLoading] = useState(false);
+
+  // Document upload / parse states
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [importFile, setImportFile] = useState(null);
+  const [importLoading, setImportLoading] = useState(false);
+  const [parsedQuestions, setParsedQuestions] = useState([]);
+  const [importError, setImportError] = useState('');
+  const [bulkSaveLoading, setBulkSaveLoading] = useState(false);
+  const [elapsedTime, setElapsedTime] = useState(0);
 
   // Load cascading filters
   useEffect(() => {
@@ -269,6 +278,108 @@ const QuestionBank = () => {
     }
   };
 
+  const handleFileChange = (e) => {
+    setImportFile(e.target.files[0]);
+    setImportError('');
+  };
+
+  const handleUploadParse = async () => {
+    if (!importFile) {
+      setImportError('Please select a file first.');
+      return;
+    }
+    setImportLoading(true);
+    setImportError('');
+    setElapsedTime(0);
+
+    const startTime = Date.now();
+    const timerId = setInterval(() => {
+      setElapsedTime(((Date.now() - startTime) / 1000).toFixed(1));
+    }, 100);
+
+    const formData = new FormData();
+    formData.append('file', importFile);
+
+    try {
+      const response = await api.post('/questions/upload-parse', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+      clearInterval(timerId);
+      
+      if (Array.isArray(response.data) && response.data.length > 0) {
+        setParsedQuestions(response.data);
+      } else {
+        setImportError('No questions could be extracted. Please ensure the document contains questions (e.g. "Question 1: ..."), multiple choice options (e.g. "a) ..."), and correct answers (e.g. "Answer: a").');
+      }
+    } catch (err) {
+      clearInterval(timerId);
+      setImportError(err.response?.data?.error || 'Failed to parse file. Make sure file contains valid text or supported question structures.');
+    } finally {
+      clearInterval(timerId);
+      setImportLoading(false);
+    }
+  };
+
+  const handleParsedQuestionChange = (qIdx, field, value) => {
+    const next = [...parsedQuestions];
+    next[qIdx][field] = value;
+    setParsedQuestions(next);
+  };
+
+  const handleParsedOptionChange = (qIdx, optIdx, value) => {
+    const next = [...parsedQuestions];
+    const opts = JSON.parse(next[qIdx].optionsJson || '[]');
+    opts[optIdx] = value;
+    next[qIdx].optionsJson = JSON.stringify(opts);
+    setParsedQuestions(next);
+  };
+
+  const addParsedOption = (qIdx) => {
+    const next = [...parsedQuestions];
+    const opts = JSON.parse(next[qIdx].optionsJson || '[]');
+    opts.push('');
+    next[qIdx].optionsJson = JSON.stringify(opts);
+    setParsedQuestions(next);
+  };
+
+  const removeParsedOption = (qIdx, optIdx) => {
+    const next = [...parsedQuestions];
+    const opts = JSON.parse(next[qIdx].optionsJson || '[]');
+    if (opts.length <= 2) return;
+    const filteredOpts = opts.filter((_, idx) => idx !== optIdx);
+    next[qIdx].optionsJson = JSON.stringify(filteredOpts);
+    setParsedQuestions(next);
+  };
+
+  const removeParsedQuestion = (qIdx) => {
+    setParsedQuestions(parsedQuestions.filter((_, idx) => idx !== qIdx));
+  };
+
+  const handleBulkSave = async () => {
+    if (parsedQuestions.length === 0) {
+      setImportError('No questions parsed to save.');
+      return;
+    }
+    setBulkSaveLoading(true);
+    setImportError('');
+    try {
+      await api.post('/questions/bulk', {
+        subjectId: selectedSubjectId,
+        questions: parsedQuestions
+      });
+      setIsImportOpen(false);
+      setParsedQuestions([]);
+      setImportFile(null);
+      fetchBankQuestions();
+    } catch (err) {
+      setImportError(err.response?.data?.error || 'Failed to save questions to database.');
+    } finally {
+      setBulkSaveLoading(false);
+    }
+  };
+
   const filteredQuestions = questions.filter(q => 
     q.questionText.toLowerCase().includes(search.toLowerCase())
   );
@@ -279,6 +390,8 @@ const QuestionBank = () => {
     { label: 'Question Bank', to: '/faculty/questions', icon: HelpCircle },
   ];
 
+  console.log('IMPORT MODAL STATE:', { isImportOpen, importLoading, parsedQuestionsLength: parsedQuestions?.length, parsedQuestions });
+
   return (
     <DashboardLayout navItems={navItems}>
       <div class="space-y-6">
@@ -287,14 +400,24 @@ const QuestionBank = () => {
             <h1 class="text-2xl font-bold text-slate-900 font-sans">Question Bank</h1>
             <p class="text-sm text-slate-500 font-medium font-sans">Manage reusable question pools categorized by difficulty levels and papers.</p>
           </div>
-          <button 
-            disabled={!selectedSubjectId}
-            onClick={() => handleOpenModal()}
-            class="flex items-center space-x-2 px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-xl text-sm font-semibold shadow-lg shadow-primary/10 disabled:opacity-50 transition-all shrink-0"
-          >
-            <Plus class="w-4.5 h-4.5" />
-            <span>Create Question</span>
-          </button>
+          <div class="flex items-center space-x-2 shrink-0">
+            <button 
+              disabled={!selectedSubjectId}
+              onClick={() => setIsImportOpen(true)}
+              class="flex items-center space-x-2 px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-sm font-semibold shadow-sm disabled:opacity-50 transition-all shrink-0"
+            >
+              <Upload class="w-4.5 h-4.5 text-slate-500" />
+              <span>Import from File</span>
+            </button>
+            <button 
+              disabled={!selectedSubjectId}
+              onClick={() => handleOpenModal()}
+              class="flex items-center space-x-2 px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-xl text-sm font-semibold shadow-lg shadow-primary/10 disabled:opacity-50 transition-all shrink-0"
+            >
+              <Plus class="w-4.5 h-4.5" />
+              <span>Create Question</span>
+            </button>
+          </div>
         </div>
 
         {/* Filter Selection Panel */}
@@ -691,6 +814,284 @@ const QuestionBank = () => {
                 </div>
               </form>
 
+            </div>
+          </div>
+        )}
+
+        {/* Import Modal */}
+        {isImportOpen && (
+          <div class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div class="bg-white rounded-2xl border border-slate-100 shadow-premium w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200 font-sans">
+              {/* Header */}
+              <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white z-10">
+                <div>
+                  <h3 class="text-base font-bold text-slate-900">Import Questions from Document</h3>
+                  <p class="text-xs text-slate-500 font-medium">Upload a PDF, DOCX, or TXT file to parse questions automatically.</p>
+                </div>
+                <button 
+                  onClick={() => {
+                    setIsImportOpen(false);
+                    setParsedQuestions([]);
+                    setImportFile(null);
+                    setImportError('');
+                  }}
+                  class="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-all font-bold text-lg"
+                >
+                  &times;
+                </button>
+              </div>
+
+              {/* Body */}
+              <div class="p-6 overflow-y-auto flex-1 space-y-6">
+                {importError && (
+                  <div class="flex items-start space-x-2 p-3 bg-red-50 border border-red-100 text-red-700 rounded-xl text-xs">
+                    <AlertCircle class="w-4 h-4 mt-0.5 shrink-0" />
+                    <span>{importError}</span>
+                  </div>
+                )}
+
+                {/* Upload Control */}
+                {parsedQuestions.length === 0 && !importLoading && (
+                  <div class="border-2 border-dashed border-slate-200 rounded-2xl p-8 flex flex-col items-center justify-center text-center space-y-4 hover:border-primary/50 transition-all">
+                    <div class="p-4 bg-slate-50 text-slate-400 rounded-full">
+                      <Upload class="w-8 h-8" />
+                    </div>
+                    <div>
+                      <p class="text-sm font-bold text-slate-700">Drag & drop your question bank file</p>
+                      <p class="text-xs text-slate-400 mt-1">Supports PDF, Word (.docx), or Text (.txt)</p>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                      <input 
+                        type="file" 
+                        id="fileImportInput" 
+                        accept=".pdf,.docx,.txt" 
+                        onChange={handleFileChange}
+                        class="hidden" 
+                      />
+                      <label 
+                        htmlFor="fileImportInput"
+                        class="px-4 py-2 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer animate-pulse"
+                      >
+                        Choose File
+                      </label>
+                      {importFile && (
+                        <span class="text-xs text-slate-500 font-medium max-w-[200px] truncate">{importFile.name}</span>
+                      )}
+                    </div>
+                    {importFile && (
+                      <button
+                        onClick={handleUploadParse}
+                        disabled={importLoading}
+                        class="px-5 py-2 bg-primary hover:bg-primary-hover text-white rounded-xl text-xs font-bold shadow-md shadow-primary/10 transition-all disabled:opacity-50 flex items-center space-x-2"
+                      >
+                        <FileText class="w-3.5 h-3.5 animate-bounce" />
+                        <span>Analyze Document</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Loading Animation State */}
+                {importLoading && (
+                  <div class="flex flex-col items-center justify-center py-16 px-8 bg-slate-50/50 rounded-2xl border border-slate-100 space-y-6">
+                    <div class="relative flex items-center justify-center">
+                      <div class="absolute w-20 h-20 border-4 border-primary/20 border-t-primary rounded-full animate-spin"></div>
+                      <div class="absolute w-16 h-16 bg-primary/10 rounded-full animate-ping"></div>
+                      <div class="relative w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-md">
+                        <FileText class="w-6 h-6 text-primary animate-pulse" />
+                      </div>
+                    </div>
+                    <div class="text-center max-w-sm space-y-2 flex flex-col items-center">
+                      <span class="px-2.5 py-1 bg-primary/10 text-primary text-[10px] font-bold rounded-lg tracking-wider font-mono mb-1 animate-pulse">TIME ELAPSED: {elapsedTime}s</span>
+                      <h4 class="text-sm font-bold text-slate-800 animate-pulse">Analyzing Document & Scraping Questions...</h4>
+                      <p class="text-xs text-slate-500 leading-relaxed font-sans">
+                        Extracting raw text, identifying question structures, parsing choices, and detecting correct answer mappings. Please wait.
+                      </p>
+                    </div>
+                    <div class="flex items-center space-x-4 text-[10px] text-slate-400 font-medium">
+                      <span class="flex items-center text-primary"><span class="w-1.5 h-1.5 rounded-full bg-primary mr-1 animate-pulse"></span>Reading file</span>
+                      <span class="flex items-center text-primary"><span class="w-1.5 h-1.5 rounded-full bg-primary mr-1 animate-pulse"></span>Extracting text</span>
+                      <span class="flex items-center text-primary"><span class="w-1.5 h-1.5 rounded-full bg-primary mr-1 animate-pulse"></span>Identifying structure</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Preview and Edit parsed questions */}
+                {parsedQuestions.length > 0 && (
+                  <div class="space-y-4">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-lg">
+                        Successfully parsed {parsedQuestions.length} questions
+                      </span>
+                      <button 
+                        onClick={() => setParsedQuestions([])}
+                        class="text-xs font-semibold text-red-500 hover:underline"
+                      >
+                        Clear and Upload Again
+                      </button>
+                    </div>
+
+                    <div class="space-y-4 max-h-[50vh] overflow-y-auto pr-2">
+                      {parsedQuestions.map((q, qIdx) => {
+                        const opts = JSON.parse(q.optionsJson || '[]');
+                        return (
+                          <div key={qIdx} class="p-4 border border-slate-200 rounded-2xl bg-[#F8FAFC] space-y-3 relative">
+                            <button
+                              onClick={() => removeParsedQuestion(qIdx)}
+                              class="absolute right-4 top-4 text-xs font-semibold text-slate-400 hover:text-red-500 transition-colors"
+                            >
+                              Remove Question
+                            </button>
+
+                            <div class="grid grid-cols-3 gap-3">
+                              <div class="col-span-2">
+                                <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Question Text</label>
+                                <textarea
+                                  value={q.questionText}
+                                  onChange={(e) => handleParsedQuestionChange(qIdx, 'questionText', e.target.value)}
+                                  rows={2}
+                                  class="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs outline-none focus:border-primary resize-none bg-white"
+                                />
+                              </div>
+                              <div class="space-y-2">
+                                <div>
+                                  <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Type</label>
+                                  <select
+                                    value={q.questionType}
+                                    onChange={(e) => handleParsedQuestionChange(qIdx, 'questionType', e.target.value)}
+                                    class="w-full px-2.5 py-1.5 border border-slate-200 rounded-xl text-xs outline-none bg-white"
+                                  >
+                                    <option value="OBJECTIVE">Objective (MCQ)</option>
+                                    <option value="SHORT_ANSWER">Short Answer</option>
+                                  </select>
+                                </div>
+                                <div class="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Marks</label>
+                                    <input
+                                      type="number"
+                                      value={q.marks}
+                                      onChange={(e) => handleParsedQuestionChange(qIdx, 'marks', e.target.value)}
+                                      class="w-full px-2.5 py-1.5 border border-slate-200 rounded-xl text-xs outline-none bg-white"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Difficulty</label>
+                                    <select
+                                      value={q.difficulty}
+                                      onChange={(e) => handleParsedQuestionChange(qIdx, 'difficulty', e.target.value)}
+                                      class="w-full px-2.5 py-1.5 border border-slate-200 rounded-xl text-xs outline-none bg-white"
+                                    >
+                                      <option value="EASY">Easy</option>
+                                      <option value="MEDIUM">Medium</option>
+                                      <option value="HARD">Hard</option>
+                                    </select>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Options section if Objective */}
+                            {q.questionType === 'OBJECTIVE' && (
+                              <div class="space-y-3 pt-2 border-t border-slate-100">
+                                <div class="flex items-center justify-between">
+                                  <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">Multiple Choice Options</label>
+                                  <button
+                                    onClick={() => addParsedOption(qIdx)}
+                                    class="text-[10px] font-bold text-primary hover:underline"
+                                  >
+                                    + Add Option
+                                  </button>
+                                </div>
+                                <div class="grid grid-cols-2 gap-3">
+                                  {opts.map((opt, optIdx) => (
+                                    <div 
+                                      key={optIdx} 
+                                      onClick={() => handleParsedQuestionChange(qIdx, 'correctAnswerJson', String(optIdx))}
+                                      class={`flex items-center space-x-2 bg-white px-3 py-2 border rounded-xl shadow-sm hover:border-primary/50 transition-all cursor-pointer ${
+                                        q.correctAnswerJson === String(optIdx) ? 'border-primary ring-1 ring-primary/30' : 'border-slate-200'
+                                      }`}
+                                    >
+                                      <input
+                                        type="radio"
+                                        name={`correctOpt-${qIdx}`}
+                                        checked={q.correctAnswerJson === String(optIdx)}
+                                        onChange={() => {}} // click handler is on parent container
+                                        class="w-4.5 h-4.5 text-primary border-slate-300 focus:ring-primary cursor-pointer shrink-0"
+                                      />
+                                      <span class="text-xs font-bold text-slate-400 font-sans shrink-0">{String.fromCharCode(65 + optIdx)})</span>
+                                      <input
+                                        type="text"
+                                        value={opt}
+                                        onClick={(e) => e.stopPropagation()} // don't toggle radio when focusing text input
+                                        onChange={(e) => handleParsedOptionChange(qIdx, optIdx, e.target.value)}
+                                        class="flex-1 text-xs outline-none bg-transparent font-medium text-slate-700"
+                                      />
+                                      {opts.length > 2 && (
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation(); // don't toggle radio when deleting option
+                                            removeParsedOption(qIdx, optIdx);
+                                          }}
+                                          class="text-slate-400 hover:text-red-500 text-sm font-semibold transition-colors shrink-0"
+                                        >
+                                          &times;
+                                        </button>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {q.questionType !== 'OBJECTIVE' && (
+                              <div class="pt-2 border-t border-slate-100">
+                                <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Keywords / Reference Answer</label>
+                                <input
+                                  type="text"
+                                  value={q.correctAnswerJson}
+                                  onChange={(e) => handleParsedQuestionChange(qIdx, 'correctAnswerJson', e.target.value)}
+                                  placeholder="Separate key criteria/phrases with commas"
+                                  class="w-full px-2.5 py-1.5 border border-slate-200 rounded-xl text-xs outline-none bg-white"
+                                />
+                              </div>
+                            )}
+
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div class="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end space-x-3 sticky bottom-0">
+                <button
+                  onClick={() => {
+                    setIsImportOpen(false);
+                    setParsedQuestions([]);
+                    setImportFile(null);
+                    setImportError('');
+                  }}
+                  class="px-4 py-2 border border-slate-200 text-slate-600 hover:bg-slate-100 rounded-xl text-xs font-semibold transition-all"
+                >
+                  Cancel
+                </button>
+                {parsedQuestions.length > 0 && (
+                  <button
+                    onClick={handleBulkSave}
+                    disabled={bulkSaveLoading}
+                    class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-lg shadow-emerald-600/10 transition-all flex items-center"
+                  >
+                    {bulkSaveLoading ? (
+                      <div class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    ) : (
+                      'Save to Question Bank'
+                    )}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         )}

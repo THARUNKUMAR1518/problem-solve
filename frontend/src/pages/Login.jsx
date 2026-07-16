@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { ShieldCheck, Lock, Mail, Eye, EyeOff, AlertCircle } from 'lucide-react';
+import { ShieldCheck, Lock, Mail, Eye, EyeOff, AlertCircle, ArrowLeft } from 'lucide-react';
 
 const Login = () => {
   const { login } = useAuth();
@@ -25,7 +25,7 @@ const Login = () => {
 
     try {
       await login(loginEmail, loginPassword);
-      navigate('/');
+      navigate('/dashboard');
     } catch (err) {
       setError(err);
     } finally {
@@ -77,6 +77,17 @@ const Login = () => {
       {/* Right side: Login Panel */}
       <div class="w-full lg:w-1/2 flex items-center justify-center p-8">
         <div class="w-full max-w-md bg-white rounded-2xl border border-slate-100 shadow-premium p-10">
+          
+          {/* Return to Homepage */}
+          <div class="mb-6">
+            <a
+              href="/"
+              class="inline-flex items-center space-x-2 text-xs font-semibold text-slate-500 hover:text-primary transition-colors duration-200"
+            >
+              <ArrowLeft class="w-3.5 h-3.5" />
+              <span>Return to Homepage</span>
+            </a>
+          </div>
 
           <div class="mb-8">
             <div class="flex lg:hidden items-center space-x-2 mb-6">

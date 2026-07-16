@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import Home from './pages/Home';
 import Login from './pages/Login';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
@@ -110,8 +111,9 @@ function App() {
           
           <Route path="/unauthorized" element={<Unauthorized />} />
 
-          {/* Root Redirector */}
-          <Route path="/" element={<DashboardRedirect />} />
+          {/* Root Home Page & Dashboard Redirector */}
+          <Route path="/" element={<Home />} />
+          <Route path="/dashboard" element={<DashboardRedirect />} />
 
           {/* Super Admin Protected Routes */}
           <Route path="/super-admin/*" element={

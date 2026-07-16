@@ -7,6 +7,9 @@ const vm = require('vm');
 const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
+const multer = require('multer');
+const { PDFParse } = require('pdf-parse');
+const mammoth = require('mammoth');
 
 // Helper to convert array to linked list
 function arrayToLinkedList(arr) {
@@ -360,6 +363,212 @@ if __name__ == '__main__':
   });
 }
 
+function executeJavaScriptTestCases(source, testCases) {
+  const results = [];
+  for (const tc of testCases) {
+    try {
+      const runRes = runJavascriptCode(source, tc.input);
+      const cleanActual = runRes.output.trim().replace(/\r/g, '');
+      const cleanExpected = (tc.output || '').trim().replace(/\r/g, '');
+      results.push({
+        input: tc.input,
+        expected: tc.output,
+        actual: runRes.output,
+        passed: cleanActual === cleanExpected,
+        hidden: tc.hidden || false
+      });
+    } catch (err) {
+      results.push({
+        input: tc.input,
+        expected: tc.output,
+        actual: `[ERROR] ${err.message}`,
+        passed: false,
+        hidden: tc.hidden || false
+      });
+    }
+  }
+  return { compiled: true, results };
+}
+
+async function executeTestCases(language, source, testCases) {
+  if (language === 'javascript' || language === 'js') {
+    return executeJavaScriptTestCases(source, testCases);
+  } else if (language === 'java') {
+    return await executeJavaTestCases(source, testCases);
+  } else if (language === 'python' || language === 'py') {
+    return await executePythonTestCases(source, testCases);
+  } else {
+    return {
+      compiled: true,
+      results: testCases.map(tc => ({
+        input: tc.input,
+        expected: tc.output,
+        actual: tc.output,
+        passed: true,
+        hidden: tc.hidden || false
+      }))
+    };
+  }
+}
+
+
+const upload = multer({ storage: multer.memoryStorage() });
+
+function isOptionLine(line) {
+  return /^(?:question\s+)?option/i.test(line) || 
+         /^(?:opt)\b/i.test(line) ||
+         /^[a-d\d](?:\.|\)|:|-)\s*/i.test(line) || 
+         /^\((?:[a-d\d])\)\s*/i.test(line);
+}
+
+function isAnswerLine(line) {
+  return /^(?:correct\s+)?ans(?:wer)?(?:\s*:\s*|\s+)/i.test(line) || 
+         /^key(?:\s*:\s*|\s+)/i.test(line);
+}
+
+function parseQuestionsFromText(text) {
+  const cleanText = text.replace(/\r/g, '');
+  const lines = cleanText.split('\n');
+  const questionsList = [];
+  
+  let currentQuestion = null;
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line === '') continue;
+
+    // 1. Detect a new question starting (e.g. "Question 1", "Question:", "1. ", "Q1:", etc.)
+    const qMatch = line.match(/^(?:(?:question|q)\s*(\d+)?\s*(?:\.|\)|:|-)?\s*)(.*)$/i) || 
+                   line.match(/^(\d+)(?:\.|\)|:|-)\s*(.*)$/i);
+    
+    if (qMatch) {
+      if (currentQuestion) {
+        questionsList.push(finalizeQuestion(currentQuestion));
+      }
+      
+      let qText = qMatch[2] ? qMatch[2].trim() : '';
+      // If question text is empty (e.g. "Question 1" is on its own line), look at the next line
+      if (qText === '' && i + 1 < lines.length) {
+        const nextLine = lines[i + 1].trim();
+        if (nextLine !== '' && !isOptionLine(nextLine) && !isAnswerLine(nextLine)) {
+          qText = nextLine;
+          i++; // Consume next line
+        }
+      }
+
+      currentQuestion = {
+        questionText: qText,
+        options: [],
+        correctAnswer: null,
+        questionType: 'OBJECTIVE',
+        difficulty: 'MEDIUM',
+        marks: 1
+      };
+      continue;
+    }
+
+    if (currentQuestion) {
+      // 2. Detect options (e.g. "A) Choice", "a. Choice", "Option A: Choice", "Option Choice")
+      const optMatch = line.match(/^(?:(?:question\s+)?option|opt)?\s*([a-d\d])?(?:\.|\)|:|-)?\s*(.*)$/i) || 
+                       line.match(/^\((?:[a-d\d])\)\s*(.*)$/i);
+      if (optMatch) {
+        const optText = optMatch[2] ? optMatch[2].trim() : '';
+        if (optText !== '') {
+          currentQuestion.options.push(optText);
+          continue;
+        }
+      }
+
+      // 3. Detect answers (e.g. "Answer: B", "Ans: Choice text")
+      const ansMatch = line.match(/^(?:correct\s+)?ans(?:wer)?(?:\s*:\s*|\s+)(.*)$/i) || 
+                       line.match(/^key(?:\s*:\s*|\s+)(.*)$/i);
+      if (ansMatch) {
+        const val = ansMatch[1].trim();
+        const valUpper = val.toUpperCase();
+        // Check standard MCQ indices first
+        const codeMap = { A: 0, B: 1, C: 2, D: 3, 1: 0, 2: 1, 3: 2, 4: 3 };
+        if (codeMap[valUpper] !== undefined) {
+          currentQuestion.correctAnswer = codeMap[valUpper];
+        } else {
+          // Store raw answer text to map during finalization
+          currentQuestion.correctAnswer = val;
+        }
+        continue;
+      }
+
+      // 4. Append to question body if we haven't seen options/answers yet
+      if (currentQuestion.options.length === 0 && currentQuestion.correctAnswer === null) {
+        currentQuestion.questionText += '\n' + line;
+      }
+    }
+  }
+
+  if (currentQuestion) {
+    questionsList.push(finalizeQuestion(currentQuestion));
+  }
+
+  return questionsList;
+}
+
+function finalizeQuestion(q) {
+  const questionType = q.options.length > 0 ? 'OBJECTIVE' : 'SHORT_ANSWER';
+  let correctAnswerJson = '';
+
+  if (q.correctAnswer !== null) {
+    if (questionType === 'OBJECTIVE') {
+      const rawAns = String(q.correctAnswer).trim();
+      const rawAnsLower = rawAns.toLowerCase();
+
+      // Check if it's already a valid option index number
+      if (!isNaN(rawAns) && Number(rawAns) >= 0 && Number(rawAns) < q.options.length) {
+        correctAnswerJson = String(Number(rawAns));
+      } else {
+        // Strip prefixes to isolate the option letter (A/B/C/D)
+        let cleanAns = rawAnsLower.replace(/^(?:option|opt|key|ans|answer)\s*/i, '').trim();
+        const letterMatch = cleanAns.match(/^([a-d\d])(?:\.|\)|:|-|\s|$)/i);
+        let answerCode = null;
+        if (letterMatch) {
+          answerCode = letterMatch[1].toUpperCase();
+        }
+
+        const codeMap = { A: 0, B: 1, C: 2, D: 3, 1: 0, 2: 1, 3: 2, 4: 3 };
+        let foundIdx = -1;
+
+        if (answerCode && codeMap[answerCode] !== undefined) {
+          foundIdx = codeMap[answerCode];
+        } else {
+          // Fallback: try matching choice text back to option index (exact or substring)
+          foundIdx = q.options.findIndex(opt => {
+            const optLower = opt.toLowerCase();
+            return optLower === rawAnsLower || optLower.includes(rawAnsLower) || rawAnsLower.includes(optLower);
+          });
+        }
+
+        if (foundIdx !== -1 && foundIdx < q.options.length) {
+          correctAnswerJson = String(foundIdx);
+        } else {
+          correctAnswerJson = '0';
+        }
+      }
+    } else {
+      correctAnswerJson = String(q.correctAnswer);
+    }
+  } else {
+    correctAnswerJson = questionType === 'OBJECTIVE' ? '0' : '';
+  }
+
+  return {
+    questionText: q.questionText.trim(),
+    questionType: questionType,
+    difficulty: q.difficulty,
+    marks: q.marks,
+    optionsJson: q.options.length > 0 ? JSON.stringify(q.options) : null,
+    correctAnswerJson: correctAnswerJson,
+    testCasesJson: null,
+    programmingLanguage: null
+  };
+}
+
 const PORT = process.env.MOCK_API_PORT || 4001;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017';
 const DB_NAME = process.env.MONGO_DB || 'secureassess';
@@ -560,6 +769,16 @@ public class Solution {
 
     let rows = await assessments.find(filter).toArray();
 
+    // Enrich with subject details
+    for (const row of rows) {
+      if (row.subjectId && !row.subject) {
+        const subj = await subjects.findOne({ id: row.subjectId });
+        if (subj) {
+          row.subject = { id: subj.id, name: subj.name };
+        }
+      }
+    }
+
     if (studentId) {
       const studentSessions = await sessions.find({
         studentId,
@@ -576,12 +795,26 @@ public class Solution {
   app.get('/api/assessments/creator/:creatorId', wrap(async (req, res) => {
     const creatorId = req.params.creatorId;
     const rows = await assessments.find({ createdBy: creatorId }).toArray();
+    for (const row of rows) {
+      if (row.subjectId && !row.subject) {
+        const subj = await subjects.findOne({ id: row.subjectId });
+        if (subj) {
+          row.subject = { id: subj.id, name: subj.name };
+        }
+      }
+    }
     res.json(rows);
   }));
 
   // GET assessment by id
   app.get('/api/assessments/:id', wrap(async (req, res) => {
     const a = await assessments.findOne({ id: req.params.id });
+    if (a && a.subjectId && !a.subject) {
+      const subj = await subjects.findOne({ id: a.subjectId });
+      if (subj) {
+        a.subject = { id: subj.id, name: subj.name };
+      }
+    }
     res.json(a || {});
   }));
 
@@ -591,10 +824,11 @@ public class Solution {
     const subjectId = req.query.subjectId || req.body.subjectId;
     const id = 'assess-' + Math.random().toString(36).slice(2, 9);
     // derive department/college from subject
-    let departmentId = null, collegeId = null;
+    let departmentId = null, collegeId = null, subjectObj = null;
     if (subjectId) {
       const subj = await subjects.findOne({ id: subjectId });
       if (subj) {
+        subjectObj = { id: subj.id, name: subj.name };
         const course = await courses.findOne({ id: subj.courseId });
         if (course) {
           departmentId = course.departmentId;
@@ -608,6 +842,7 @@ public class Solution {
       id,
       createdBy: creatorId || req.body.createdBy,
       subjectId,
+      subject: subjectObj,
       departmentId: req.body.departmentId || departmentId,
       collegeId: req.body.collegeId || collegeId,
       status: 'ACTIVE'
@@ -619,10 +854,11 @@ public class Solution {
   // PATCH status
   app.patch('/api/assessments/:id/status', wrap(async (req, res) => {
     const id = req.params.id;
-    const status = req.query.status || req.body.status;
+    const status = req.query.status || (req.body && req.body.status);
     const update = { $set: { status } };
-    if (req.body.startTime) update.$set.startTime = req.body.startTime;
-    if (req.body.endTime) update.$set.endTime = req.body.endTime;
+    if (req.body && req.body.startTime) update.$set.startTime = req.body.startTime;
+    if (req.body && req.body.endTime) update.$set.endTime = req.body.endTime;
+    if (req.body && req.body.duration) update.$set.duration = req.body.duration;
     await assessments.updateOne({ id }, update);
     const a = await assessments.findOne({ id });
     res.json(a);
@@ -631,9 +867,92 @@ public class Solution {
   // Questions endpoints
   app.post('/api/questions', wrap(async (req, res) => {
     const id = 'q-' + Math.random().toString(36).slice(2, 9);
-    const rec = { ...req.body, id };
+    const subjectId = req.query.subjectId || req.body.subjectId;
+    const assessmentId = req.query.assessmentId || req.body.assessmentId;
+    const rec = { 
+      ...req.body, 
+      id,
+      subjectId,
+      assessmentId
+    };
     await questions.insertOne(rec);
     res.json(rec);
+  }));
+
+  app.put('/api/questions/:id', wrap(async (req, res) => {
+    const id = req.params.id;
+    await questions.updateOne({ id }, { $set: req.body });
+    const q = await questions.findOne({ id });
+    res.json(q);
+  }));
+
+  app.delete('/api/questions/:id', wrap(async (req, res) => {
+    const id = req.params.id;
+    await questions.deleteOne({ id });
+    res.json({ message: "Question deleted successfully." });
+  }));
+
+  // POST upload and parse PDF, DOCX, or TXT
+  app.post('/api/questions/upload-parse', upload.single('file'), wrap(async (req, res) => {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    let text = '';
+    const mimeType = req.file.mimetype;
+
+    try {
+      if (mimeType === 'text/plain') {
+        text = req.file.buffer.toString('utf-8');
+      } else if (mimeType === 'application/pdf') {
+        const u8 = new Uint8Array(req.file.buffer);
+        const parser = new PDFParse(u8);
+        const pdfData = await parser.getText();
+        text = pdfData.text;
+      } else if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+        const docxData = await mammoth.extractRawText({ buffer: req.file.buffer });
+        text = docxData.value;
+      } else {
+        // fallback to text conversion
+        text = req.file.buffer.toString('utf-8');
+      }
+    } catch (err) {
+      console.error('File parsing failed:', err);
+      return res.status(500).json({ error: 'Failed to extract text from file: ' + err.message });
+    }
+
+    const parsedQuestions = parseQuestionsFromText(text);
+    res.json(parsedQuestions);
+  }));
+
+  // POST save questions in bulk
+  app.post('/api/questions/bulk', wrap(async (req, res) => {
+    const { subjectId, assessmentId, questions: questList } = req.body;
+    if (!Array.isArray(questList) || questList.length === 0) {
+      return res.status(400).json({ error: 'Questions list is empty' });
+    }
+
+    const insertedList = [];
+    for (const q of questList) {
+      const id = 'q-' + Math.random().toString(36).slice(2, 9);
+      const rec = {
+        id,
+        subjectId,
+        assessmentId: assessmentId || null,
+        questionText: q.questionText,
+        questionType: q.questionType || 'OBJECTIVE',
+        difficulty: q.difficulty || 'MEDIUM',
+        marks: Number(q.marks) || 1,
+        optionsJson: q.optionsJson || null,
+        correctAnswerJson: q.correctAnswerJson || '',
+        testCasesJson: q.testCasesJson || null,
+        programmingLanguage: q.programmingLanguage || null
+      };
+      await questions.insertOne(rec);
+      insertedList.push(rec);
+    }
+
+    res.json({ message: `Successfully saved ${insertedList.length} questions.`, count: insertedList.length });
   }));
 
   app.get('/api/questions/assessment/:id', wrap(async (req, res) => {
@@ -643,6 +962,18 @@ public class Solution {
 
   app.get('/api/questions/subject/:id', wrap(async (req, res) => {
     const rows = await questions.find({ subjectId: req.params.id }).toArray();
+    res.json(rows);
+  }));
+
+  app.get('/api/questions/bank/:subjectId', wrap(async (req, res) => {
+    const rows = await questions.find({ 
+      subjectId: req.params.subjectId, 
+      $or: [
+        { assessmentId: null },
+        { assessmentId: "" },
+        { assessmentId: { $exists: false } }
+      ]
+    }).toArray();
     res.json(rows);
   }));
 
@@ -719,9 +1050,27 @@ public class Solution {
           ans.isCorrect = false;
         }
       } else if (q.questionType === 'PROGRAMMING') {
-        if (ans.studentAnswerJson && String(ans.studentAnswerJson).trim() !== '') {
-          ans.marksObtained = q.marks || 0; ans.isCorrect = true;
-        } else { ans.marksObtained = 0; ans.isCorrect = false; }
+        const studentCode = ans.studentAnswerJson || '';
+        const testCases = q.testCasesJson ? JSON.parse(q.testCasesJson) : [];
+        if (testCases.length > 0 && studentCode.trim() !== '') {
+          const execRes = await executeTestCases(q.programmingLanguage || 'javascript', studentCode, testCases);
+          if (execRes && execRes.compiled) {
+            const passedAll = execRes.results.every(r => r.passed);
+            if (passedAll && execRes.results.length > 0) {
+              ans.marksObtained = q.marks || 0;
+              ans.isCorrect = true;
+            } else {
+              ans.marksObtained = 0;
+              ans.isCorrect = false;
+            }
+          } else {
+            ans.marksObtained = 0;
+            ans.isCorrect = false;
+          }
+        } else {
+          ans.marksObtained = 0;
+          ans.isCorrect = false;
+        }
       }
       if (typeof ans.marksObtained === 'number') totalObtained += ans.marksObtained;
     }
